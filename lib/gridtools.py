@@ -6,20 +6,25 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
-import imp
-bean = imp.load_source('bean','/cellar/users/gbean/Dropbox/pyfiles/bean.py');
+
+import sys
+sys.path.append('/cellar/users/gbean/toolkits/python_colony_analyzer/lib')
+import load_and_crop as ld
+
+sys.path.append('/cellar/users/gbean/Dropbox/pyfiles')
+import bean
 
 ## Classes
 class Grid:
     
-    def __init__ (self, plate=None, manual=False, params={} ):
+    def __init__ (self, plate=None, manual=False, **params ):
         if plate is None:
             return
             
         if manual:
             pass
         else:
-            self = estimate_initial_grid( plate, params )
+            self = estimate_initial_grid( plate, **params )
     
     def __repr__(self):
         foo = vars(self)
@@ -47,6 +52,37 @@ def get_box(plate, rpos, cpos, win):
     return plate[max(0,ir(rpos-win)) : min(plate.shape[0],ir(rpos+win)), \
         max(0,ir(cpos-win)) : min(plate.shape[1],ir(cpos+win))]
     
+def set_box(plate, box, rpos, cpos):
+    win = (box.shape[0])/2 
+    
+    rpos = np.round(rpos)
+    cpos = np.round(cpos)
+    
+    if box.dtype is np.dtype(bool):
+        plate[rpos-win : rpos+win, cpos-win : cpos+win] |= box
+    else:
+        plate[rpos-win : rpos+win, cpos-win : cpos+win] = box
+        
+# Pixel mode
+def pixelmode(box):
+    boxs = np.sort(bean.ind(box))
+    n, xx = np.histogram(boxs, range(int(np.min(boxs)), int(np.max(boxs))))
+
+    start = 0
+    pos = 0
+    while pos < len(boxs):
+        if boxs[pos] == boxs[start]:
+            pass
+        else:
+            boxs[start:pos] = np.linspace(boxs[start], boxs[pos], pos-start)
+            start = pos
+        pos += 1
+
+    w = int( max(n) * 2 )
+    #tmp = [ np.sum(boxs[ii-w:ii+w]-boxs[ii-w]) for ii in range(w,len(boxs)-w) ]
+    tmp = [ boxs[ii+w]-boxs[ii-w] for ii in range(w,len(boxs)-w) ]
+    return boxs[np.argmin(tmp) + w]
+
 # Estimate intensity threshold
 def estimate_intensity_threshold( plate ):
     # Find middle box
@@ -114,7 +150,7 @@ def determine_grid_from_corners( corners, grid ):
     return grid
     
 # Estimate initial grid
-def estimate_initial_grid( plate, params={} ):
+def estimate_initial_grid( plate, **params ):
     if 'sizestandard' not in params:
         params['sizestandard'] = [1853, 2765];
     
@@ -152,14 +188,14 @@ def estimate_initial_grid( plate, params={} ):
     return determine_grid_from_corners( coords, grid )
 
 # Adjust grid
-def adjust_grid( plate, grid, params={} ):
-    bean.default_param( params, 'convergethresh', 3 )
-    bean.default_param( params, 'adjustmentwindow', \
-        int(np.round( grid.dims[0]/8.0 )) )
-    bean.default_param( params, 'finaladjust', True )
-    bean.default_param( params, 'fitfunction', \
-        lambda r, c: np.hstack((np.ones((np.prod(r.shape),1)), \
-        bean.ind(r,nx1=True), bean.ind(c,nx1=True))) )
+def adjust_grid( plate, grid, **params ):
+    bean.default_param( params, \
+        convergethresh = 3, \
+        adjustmentwindow = int(np.round( grid.dims[0]/8.0 )), \
+        finaladjust = True, \
+        fitfunction = lambda r, c: \
+            np.hstack((np.ones((np.prod(r.shape),1)), \
+            bean.ind(r,nx1=True), bean.ind(c,nx1=True))) )
         
     # Subroutines
     def measure_offset( box ):
@@ -243,15 +279,141 @@ def adjust_grid( plate, grid, params={} ):
     return grid
         
 # Determine colony grid
-def determine_colony_grid( plate, params={} ):
+def determine_colony_grid( plate, **params ):
     # Compute Grid
     if 'initialgrid' in params:
         grid = params['initialgrid'];
     else:
-         grid = estimate_initial_grid( plate, params );
+         grid = estimate_initial_grid( plate, **params );
          
     # Adjust Grid
-    return adjust_grid( plate, grid, params );
+    return adjust_grid( plate, grid, **params );
        
 # View plate image
-def view_plate_image( 
+def view_plate_image( filename, **params ):
+    # Default parameters
+    bean.default_param( params, \
+        showimage = True, \
+        interactive = False, \
+        showgrid = False, \
+        shownotes = True, \
+        showaxes = False, \
+        notes = [], \
+        returnnotes = False, \
+        applythreshold = False, \
+        maskthreshold = False )
+    bean.default_param( params, newfigure = params['interactive'] )
+    bean.default_param( params, \
+        gridspecs = {'s': 10, 'c':'#0000FF', 'marker':'o'}, \
+        notespecs = {'s': 20, 'c':'#FF0000', 'marker':'o','alpha':0.5} )
+    
+    # Load image and image info
+    if isinstance(filename, basestring):
+        plate = ld.load_plate( filename )
+    else:
+        # Assume filename is the plate
+        plate = filename
+    
+    # Show image
+    if params['newfigure']:
+        fig = plt.figure()
+    else:
+        fig = plt.gcf()
+    
+    def show_plate():
+        plt.clf()
+        plt.imshow(plate, aspect='auto', interpolation='none', cmap='gray' )
+    show_plate()
+    xl = plt.xlim();
+    yl = plt.ylim();
+    ax = fig.gca();
+        
+    # Show grid
+    if 'grid' not in params:
+        grid = determine_colony_grid( plate )
+    else:
+        grid = params['grid']
+    
+    
+    if params['showgrid']:
+        gax = fig.add_axes(ax.get_position().bounds, frameon=False)
+        plt.xlim(xl)
+        plt.ylim(yl)
+        def show_grid():
+            plt.sca(gax)
+            plt.cla()
+            plt.scatter(grid.c, grid.r, **params['gridspecs']) 
+            plt.xlim(xl)
+            plt.ylim(yl)
+            #fig.canvas.draw()
+        show_grid()
+
+    # Show notes
+    notes = np.zeros(grid.dims) == 1
+    for note in params['notes']:
+        r, c = bean.ind2sub(note, grid.dims)
+        notes[r,c] = True
+    if params['shownotes']:
+        nax = fig.add_axes(ax.get_position().bounds, frameon=False)
+        plt.xlim(xl)
+        plt.ylim(yl)
+        def show_notes(notes):
+            plt.sca(nax)
+            plt.cla()
+            plt.scatter(grid.c[notes], grid.r[notes], **params['notespecs'])
+            plt.xlim(xl)
+            plt.ylim(yl)
+            fig.canvas.draw()
+        if np.any(notes):
+            show_notes(notes)
+    
+    # Interactive figure
+    if params['interactive']:
+        class clicked:
+            click = False
+            def __init__(self):
+                self.click = False
+            def on(self):
+                self.click = True
+            def off(self):
+                self.click = False
+            def isclicked(self):
+                return self.click
+        click = clicked()
+                
+        def get_coords(event):
+            r, c = event.ydata, event.xdata
+            foo = np.abs(grid.r - r) + abs(grid.c-c)
+            r, c = bean.ind2sub(np.argmin(foo), grid.dims)
+            return r, c
+            
+        def toggle_note(r, c):
+            notes[r,c] = ~notes[r,c]
+            pass
+            
+        def onclick(event):
+            if click.isclicked():
+                return
+            else:
+                click.on()
+                # Get grid coordinate
+                r, c = get_coords(event)
+                #print r, c
+                
+                # Toggle note
+                toggle_note(r, c)
+                #print notes[r,c]
+                
+                # Refresh image
+                if params['shownotes'] and np.any(notes):
+                    show_notes(notes)
+                click.off()
+            
+        fig.canvas.mpl_connect('button_press_event', onclick)
+        
+    plt.draw()
+    plt.show()
+    if params['returnnotes']:
+        return notes
+
+print 'GridTools loaded.'

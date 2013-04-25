@@ -10,13 +10,34 @@ import imp
 bean = imp.load_source('bean','/cellar/users/gbean/Dropbox/pyfiles/bean.py');
 
 # Functions
-def load_image(filename):
+def rgb2gray(rgb):
+    """ Borrowed from stackoverflow and wikipedia: 
+        http://stackoverflow.com/questions/12201577/
+            convert-rgb-image-to-grayscale-in-python
+        http://en.wikipedia.org/wiki/Grayscale#Converting_color_to_grayscale""" 
+    
+    r, g, b = rgb[:,:,0], rgb[:,:,1], rgb[:,:,2]
+    gray = 0.2989 * r + 0.5870 * g + 0.1140 * b
+
+    return gray
+    
+def load_image(filename, method='grayscale'):
     # Load image
     img = mpimg.imread(filename);
     
     # Average across the three channels
-    return np.mean(img,2);
-    
+    if method == 'mean':
+        return np.mean(img,2).astype('uint8')
+
+    elif method == 'original':
+        return np.mean(img,2)
+
+    elif method == 'grayscale':
+        return rgb2gray(img)
+
+    else:
+        raise Exception('Method %s not supported.'%method)
+        
 def crop_image(img, offset=0, background_thresh=0.9):
     # Estimate background intensity
     foo = np.mean(img,0);
