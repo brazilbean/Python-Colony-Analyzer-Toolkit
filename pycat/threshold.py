@@ -1,22 +1,21 @@
-## Python Colony Analyzer Toolkit
-# Intensity Threshold Module
-# Gordon Bean, April 2013
+## PyCAT - Python Colony Analyzer Toolkit
+# Gordon Bean, gbean@ucsd.edu
+# April 2013
+
+## pycat.threshold Module
 
 # Imports
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
 import scipy
 from scipy import stats as pystat
 
+# Bean's bag-o-tricks
 import sys
-sys.path.append('/cellar/users/gbean/toolkits/python_colony_analyzer/lib')
-
-from load_and_crop import *
-from gridtools import *
-
 sys.path.append('/cellar/users/gbean/Dropbox/pyfiles')
-from bean import *
+import bean
+
+# pycat imports
+import pycat.grid as pygrid
 
 ## Classes
 class threshold_object:
@@ -27,7 +26,7 @@ class threshold_object:
         
 class max_min_mean( threshold_object ):
     def get_colony_box(self, plate, grid, row, col):
-        return get_box( plate, \
+        return pygrid.get_box( plate, \
             grid.r[row,col], grid.c[row,col], grid.win )
     def determine_threshold(self, plate, grid=None, row=None, col=None):
         if grid is None:
@@ -46,12 +45,12 @@ class local_fitted( threshold_object ):
         mb = np.min(box)
         it = (np.max(box) + mb) / 2
         #pm = bean.pmode(box)
-        pm = pixelmode(box)
+        pm = pygrid.pixelmode(box)
         c = 5
         while c > 0 and pm > it:
             it = (it + mb) / 2
             #pm = bean.pmode(box[box<it])
-            pm = pixelmode(box[box<it])
+            pm = pygrid.pixelmode(box[box<it])
             c -= 1
         tmp = box[box<pm] - pm
         st = np.std(np.vstack((tmp,-tmp)))
@@ -69,7 +68,7 @@ class local_fitted( threshold_object ):
             win = win * 4
         
         # Get box
-        return get_box( plate, grid.r[rr,cc], grid.c[rr,cc], win )
+        return pygrid.get_box( plate, grid.r[rr,cc], grid.c[rr,cc], win )
         
     def determine_threshold( self, plate, grid=None, row=None, col=None ):
         if grid is None:
@@ -104,7 +103,7 @@ class local_gaussian(threshold_object):
             output=self.gplate, mode=self.mode)
             
     def get_colony_box( self, plate, grid, row, col ):
-        return get_box( plate, grid, row, col, grid.win );
+        return pygrid.get_box( plate, grid, row, col, grid.win )
         
     def determine_threshold( self, plate, grid=None, row=None, col=None ):
         if self.gplate is None:
@@ -124,7 +123,7 @@ def compute_global_threshold( plate, grid_, **params ):
         raise Exception('thresholdobject must inherit from threshold_object');
     
     # Get global box
-    box = plate[np.round(np.max(grid.r[0,:])) : np.round(np.min(grid.r[-1,:])),\
+    box = plate[np.round(np.max(grid.r[0,:])) : np.round(np.min(grid.r[-1,:])),
         np.round(np.max(grid.c[:,0])) : np.round(np.min(grid.c[:,-1])) ]
     
     # Get threshold
@@ -148,9 +147,7 @@ def compute_local_thresholds( plate, grid_, **params ):
     thobj = params['thresholdobject'];
     if params['parallel']:
         # Parallel processing using IPython DirectView
-        rc = Client()
-        dview = rc[:]
-        
+        raise Exception('Parallel mode not yet supported')
         
     else:
         det_thresh = lambda r, c: thobj.determine_threshold( \
