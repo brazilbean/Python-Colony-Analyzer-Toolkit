@@ -86,7 +86,7 @@ class local_fitted( threshold_object ):
         bb = pvals > self.pthresh
         return np.min( box[bb] ) - 1
     
-class local_gaussian(threshold_object):
+class _local_gaussian(threshold_object):
     gplate = None
     mode = None
     sigma = None
@@ -115,6 +115,14 @@ class local_gaussian(threshold_object):
         return np.min(box[box>gbox])
     
 ## Methods
+def local_gaussian(plate, grid, sigma=None, mode='reflect', offset=0):
+    if sigma is None:
+        sigma = grid.win/2
+        
+    gplate = np.zeros(plate.shape, 'double')
+    scipy.ndimage.gaussian_filter(plate, sigma, output=gplate, mode=mode)
+    return plate > (gplate - offset)
+    
 def compute_global_threshold( plate, grid_, **params ):
     grid = grid_
     bean.default_param( params, thresholdobject=local_fitted() )
