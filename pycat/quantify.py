@@ -6,6 +6,8 @@
 
 # Imports
 import numpy as np
+import pickle
+import os
 
 # Bean's bag-o-tricks
 import sys
@@ -72,10 +74,9 @@ def threshold_bounded( plate, grid, r, c ):
     return np.sum(bbox)
     
 def measure_colony_sizes( plate, **params ):
-    bean.default_param( params, \
-        manualgrid = False, \
-        thresholdobject = pythresh.local_fitted(), \
-        localthreshold = True, \
+    bean.default_param( params, 
+        manualgrid = False, 
+        thresholdfunction = pythresh.local_gaussian, 
         sizefunction = threshold_bounded )
 
     # TODO
@@ -85,7 +86,7 @@ def measure_colony_sizes( plate, **params ):
     # Load plate
     if isinstance(plate, basestring):
         # "plate" is the file name
-        plate = io.load_plate(plate, **params)
+        plate = io.load_plate(plate)
     
     # Determine grid
     if params['manualgrid']:
@@ -99,26 +100,74 @@ def measure_colony_sizes( plate, **params ):
     
     # Intensity thresholds
     if not hasattr(grid, 'thresh'):
-        grid.thresh = pythresh.local_gaussian( plate, grid )
-        
-        #if params['localthreshold']:
-        #    grid.thresh = \
-        #        pythresh.compute_local_thresholds( plate, grid, **params )
-        #else:
-        #    grid.thresh = \
-        #        pythresh.compute_global_threshold( plate, grid, **params )
+        grid.thresh = params['thresholdfunction']( plate, grid )
     
     # Measure colony size
     size_fun = params['sizefunction']
-    #sizes = bean.nans(grid.dims)
-    #grid.threshed = np.zeros(plate.shape)==1
-    #for r in range(0, grid.dims[0]):
-    #    for c in range(0, grid.dims[1]):
-    #        sizes[r,c] = size_fun( plate, grid, r, c )
-    #        #pygrid.set_box(grid.threshed, tmp, grid.r[r,c], grid.c[r,c])
-    #        
     rrr, ccc = range(0, grid.dims[0]), range(0, grid.dims[1])
     sizes = [ [ size_fun( plate, grid, r, c ) for c in ccc] for r in rrr];
+  
     return np.array(sizes), grid
     
- 
+def analyze_image( filename, **params ):
+    """ Quantify the colony sizes in the image and save the output to file. """
+
+    output_extension = '.cs.txt'
+    
+    # Measure colony sizes
+    cs, grid = measure_colony_sizes( filename, **params )
+    if cs is None:
+        # The analysis failed, or was canceled
+        return
+    
+    # Print the .txt file
+    txtfile = filename + output_extension
+    cc, rr = np.meshgrid(range(0, grid.dims[1]), range(0, grid.dims[0]))
+    with open(txtfile, 'w') as fid:
+        fid.write("row\tcolumn\tsize\n")
+        for r, c, s in zip(bean.ind(rr), bean.ind(cc), bean.ind(cs)):
+            fid.write("%i\t%i\t%i\n" % (r+1, c+1, s))
+        
+    # Save grid data
+    gridfile = filename + '.info.pkl'
+    with open(gridfile, 'w') as fid:
+        pickle.dump(grid, fid, pickle.HIGHEST_PROTOCOL)
+    
+def analyze_directory_of_images( imagedir, **params ):
+    bean.default_param( params, 
+        filepattern = '\.JPG$', 
+        verbose = False, 
+        parallel = False )
+    
+    # Get image files
+    files = bean.dirfiles( imagedir, params['filepattern'] )
+    
+    # Scan the files
+    verb = params['verbose']
+    if params['parallel']:
+        #print('Parallel mode not yet supported.')
+        #pass
+        # Number of threads
+        if type(params['parallel']) is int:
+            nthreads = params['parallel']
+        else:
+            nthreads = 4
+
+        bean.verbose( verb, 
+            ' Analyzing %s with %i threads' % (imagedir, nthreads) )
+            
+        fun = lambda f: analyze_image(f, **params)
+        map( fun, files )
+        #bean.multimap( fun, files, None, nthreads )
+        
+    else:
+        for ff in files:
+            try:
+                bean.verbose( verb, ' Analyzing: %s' % ff )
+                analyze_image( ff, **params )
+            except Exception:
+                print "Image failed: \n %s \n" % ff
+            
+            
+    
+    

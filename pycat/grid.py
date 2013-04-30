@@ -51,9 +51,12 @@ class Grid:
 ## Methods
 # Get box
 def get_box(plate, rpos, cpos, win):
+    """ Returns a copy of the data in plate centered at (rpos,cpos) 
+         within a window of 2*win """
     ir = lambda x: int(round(x))
-    return plate[max(0,ir(rpos-win)) : min(plate.shape[0],ir(rpos+win)), \
-        max(0,ir(cpos-win)) : min(plate.shape[1],ir(cpos+win))]
+    return np.array( 
+        plate[max(0,ir(rpos-win)) : min(plate.shape[0],ir(rpos+win)),
+        max(0,ir(cpos-win)) : min(plate.shape[1],ir(cpos+win))] )
     
 def set_box(plate, box, rpos, cpos):
     win = (box.shape[0])/2 
@@ -287,7 +290,7 @@ def determine_colony_grid( plate, **params ):
     if 'initialgrid' in params:
         grid = params['initialgrid'];
     else:
-         grid = estimate_initial_grid( plate, **params );
+        grid = estimate_initial_grid( plate, **params );
          
     # Adjust Grid
     return adjust_grid( plate, grid, **params );

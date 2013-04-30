@@ -9,10 +9,35 @@ import sys
 sys.path.append('/cellar/users/gbean/Dropbox/pyfiles')
 import bean
 
+import pickle
+import os
+import re
 import numpy as np
 import matplotlib.image as mpimg
 
 # Functions
+def get_cs_txt_file( filename ):
+    """ Returns the .cs.txt file belonging to filename. """    
+    if re.search('cs\.txt$', filename):
+        return filename
+
+    m = re.search('(.*)info\.pkl$', filename)
+    if m:
+        return m.group(1) + 'cs.txt'
+
+    return filename + '.cs.txt'
+            
+def get_info_pkl_file( filename ):
+    """ Returns the .info.pkl file belonging to filename. """
+    if re.search('info\.pkl$', filename):
+        return filename
+        
+    m = re.search('(.*)cs\.txt$', filename)
+    if m:
+        return m.group(1) + 'info.pkl'
+    
+    return filename + '.info.pkl'
+    
 def rgb2gray(rgb):
     r, g, b = rgb[:,:,0], rgb[:,:,1], rgb[:,:,2]
     gray = 0.2989 * r + 0.5870 * g + 0.1140 * b
@@ -60,7 +85,38 @@ def crop_image(img, offset=0, background_thresh=0.9):
     return img[crop[0]:crop[1], crop[2]:crop[3]];
 
 def load_plate(filename):
-    """ Loads and crops the plate image file"""
+    """ Loads and crops the plate image file """
     img = load_image(filename);
     return crop_image(img);
+
+def load_grid( filename ):
+    """ Loads the grid information from the associated .info.pkl file. """
+    return pickle.load( open(get_info_pkl_file( filename )) )
     
+def load_colony_data( filename ):
+    """ Load the colony size data from the specified file or directory. 
+        filename may be a file name or directory name. """
+    
+    def load_file( filename ):
+        filename = get_cs_txt_file( filename )
+        rr, cc, sz = bean.filescan( 
+            filename, '(\d+)\s+(\d+)\s+(\d+)', (int, int, int), 1 )
+        
+        nr, nc = max(rr), max(cc)
+        cs = np.zeros((nr, nc)) + np.nan
+        for r, c, s in zip(rr, cc, sz):
+            cs[r-1,c-1] = s
+
+        return cs
+
+    if os.path.isdir( filename ):
+        # Directory
+        files = bean.dirfiles( filename, 'cs\.txt$' )
+        cs = [ load_file( ff ) for ff in files ]
+        
+    else :
+        # File
+        cs = load_file( filename )
+        files = [filename,]
+    
+    return cs, files
