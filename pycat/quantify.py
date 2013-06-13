@@ -7,7 +7,6 @@
 # Imports
 import numpy as np
 import pickle
-import os
 
 # Bean's bag-o-tricks
 import sys
@@ -79,19 +78,21 @@ def measure_colony_sizes( plate, **params ):
         thresholdfunction = pythresh.local_gaussian, 
         sizefunction = threshold_bounded )
 
-    # TODO
-    # - check for plate type and dimensions
-    # - manual grid
-    
     # Load plate
     if isinstance(plate, basestring):
         # "plate" is the file name
         plate = io.load_plate(plate)
     
+    # Average plate across RGB
+    if len(plate.shape) > 2:
+        plate = np.mean(plate,2)
+        
     # Determine grid
     if params['manualgrid']:
-        print "Warning, manual grid not yet implemented\n"
-        return None, None
+        params['grid'] = pygrid.manual_grid(plate, **params)
+        if params['grid'] is None:
+            # The user canceled the alignment
+            return None, None
     else:
         if 'grid' not in params:
             params['grid'] = pygrid.determine_colony_grid( plate, **params )
@@ -145,20 +146,20 @@ def analyze_directory_of_images( imagedir, **params ):
     # Scan the files
     verb = params['verbose']
     if params['parallel']:
-        #print('Parallel mode not yet supported.')
-        #pass
-        # Number of threads
-        if type(params['parallel']) is int:
-            nthreads = params['parallel']
-        else:
-            nthreads = 4
-
-        bean.verbose( verb, 
-            ' Analyzing %s with %i threads' % (imagedir, nthreads) )
-            
-        fun = lambda f: analyze_image(f, **params)
-        map( fun, files )
-        #bean.multimap( fun, files, None, nthreads )
+        print('Parallel mode not yet supported.')
+        pass
+#        # Number of threads
+#        if type(params['parallel']) is int:
+#            nthreads = params['parallel']
+#        else:
+#            nthreads = 4
+#
+#        bean.verbose( verb, 
+#            ' Analyzing %s with %i threads' % (imagedir, nthreads) )
+#            
+#        fun = lambda f: analyze_image(f, **params)
+#        map( fun, files )
+#        #bean.multimap( fun, files, None, nthreads )
         
     else:
         for ff in files:

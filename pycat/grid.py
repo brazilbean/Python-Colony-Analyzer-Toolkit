@@ -7,9 +7,9 @@
 # Imports
 import numpy as np
 import matplotlib.pyplot as plt
+import sys
 
 # Bean's bag-o-tricks
-import sys
 sys.path.append('/cellar/users/gbean/Dropbox/pyfiles')
 import bean
 
@@ -155,24 +155,160 @@ def determine_grid_from_corners( corners, grid ):
     
     return grid
     
-# Estimate initial grid
-def estimate_initial_grid( plate, **params ):
-    if 'sizestandard' not in params:
-        params['sizestandard'] = [1853, 2765];
+## Adjust Grid Functions ##
+def measure_offset( box ):
+    win = (box.shape[0]-1)/2
     
+    # Get centroid
+    thresh = (np.min(box) + np.max(box))/2
+    cents = bean.centroids( box > thresh )
+    cents = cents - (win+1)
+    tmp = np.all(abs(cents) < win/2,1)
+    if sum(tmp)>0:
+        return cents[bean.find(tmp,0),:]
+    else:
+        return np.nan
+        
+def adjust_spot( plate, rpos, cpos, win ):
+    box = get_box( plate, rpos, cpos, win )
+    off = np.round(measure_offset( box ))
+    
+    if np.any(off > win/2):
+        raise Exception('Offset too large - decrease the adjustment window')
+    if np.any(np.isnan(off)):
+        return np.nan, np.nan
+    else:
+        return (rpos + off[0], cpos + off[1])
+
+# adjust_subgrid
+def adjust_subgrid( plate, grid, rrr, ccc, **params ):
+    bean.default_param(params, 
+        coeffunction = lambda r, c: 
+            np.hstack((np.ones((np.prod(r.shape),1)), 
+            bean.ind(r,nx1=True), bean.ind(c,nx1=True))) )
+        
+    dims = grid.dims
+    win = grid.win
+    coeffun = params['coeffunction']
+    
+    rtmp, ctmp = bean.nans(grid.r.shape), bean.nans(grid.r.shape)
+    
+    for rr, cc in zip(bean.ind(rrr),bean.ind(ccc)):
+        rtmp[rr,cc], ctmp[rr,cc] = adjust_spot \
+            (plate, grid.r[rr,cc], grid.c[rr,cc], win)
+    
+    # Estimate grid parameters
+    iii = np.logical_and(~np.isnan(rtmp), ~np.isnan(ctmp))
+    cc, rr = np.meshgrid( range(0, dims[1]), range(0, dims[0]) )
+    
+    lq = np.linalg.lstsq
+    rfact = lq( coeffun(rr[iii], cc[iii]), rtmp[iii] )[0]
+    cfact = lq( coeffun(rr[iii], cc[iii]), ctmp[iii] )[0]
+    
+    # TODO - include grid.factors?
+    
+    # Compute grid position
+    grid.r = np.reshape(np.dot(coeffun(rr,cc), rfact), grid.r.shape)
+    grid.c = np.reshape(np.dot(coeffun(rr,cc), cfact), grid.c.shape)
+    
+    return grid
+
+# Adjust grid
+def adjust_grid( plate, grid, **params ):
+    bean.default_param( params, \
+        convergethresh = 3, \
+        adjustmentwindow = int(np.round( grid.dims[0]/8.0 )), \
+        finaladjust = True )
+    
+    aw = params['adjustmentwindow']
+    
+    # Initial adjustment
+    #while fitfact > params['convergethresh']:
+    for ii in [1]:
+        # Adjust internal spots
+        rrr = grid.dims[0]/2 + np.array(range(-aw, aw+1))
+        ccc = grid.dims[1]/2 + np.array(range(-aw, aw+1))
+        ccc, rrr = np.meshgrid( ccc, rrr )
+        
+        grid = adjust_subgrid( plate, grid, rrr, ccc, **params )
+        
+    # Final adjustment
+    if params['finaladjust']:
+        rrr = np.round( np.linspace(0, grid.dims[0]-1, 2*aw) )
+        ccc = np.round( np.linspace(0, grid.dims[1]-1, 2*aw) )
+        ccc, rrr = np.meshgrid(ccc, rrr)
+        
+        grid = adjust_subgrid( plate, grid, rrr, ccc, **params )
+        
+    # Extra stuff
+    return grid
+        
+def initialize_grid( plate, **params ):
+    grid = Grid()
+
     # Compute grid spacing and dimensions
     if 'gridspacing' not in params:
         params['gridspacing'] = estimate_grid_spacing( plate );
-    win = params['gridspacing'];
+    grid.win = params['gridspacing']
     
     if 'dimensions' not in params:
-        params['dimensions'] = estimate_dimensions( plate, win );
-    dims = params['dimensions'];
+        params['dimensions'] = estimate_dimensions( plate, grid.win );
+    grid.dims = params['dimensions']
+
+    return grid
     
-    # Initialize grid
-    grid = Grid()
-    grid.win = win
-    grid.dims = dims
+# Estimate initial grid
+def estimate_initial_grid_offset( plate, **params ):
+    grid = initialize_grid(plate, **params)
+    
+    # Drop into plate - get initial position
+    rpos, cpos = np.array(plate.shape)/2
+    rpos, cpos = adjust_spot( plate, rpos, cpos, grid.win )
+    
+    box = get_box(plate, rpos, cpos, grid.win*5)
+    
+    # Get initial placement
+    it = estimate_intensity_threshold(plate)
+    cents = bean.centroids(box>it)
+    cents = cents[ ~np.any(np.isnan(cents),1), :]
+    
+    tmp = np.round(cents/grid.win)
+    nix = np.any(np.logical_or(tmp < 1,tmp==np.max(tmp,0)),1)
+    rrr, ccc = tmp[~nix,0].astype(int), tmp[~nix,1].astype(int)
+    
+    grid.r, grid.c = np.zeros(grid.dims)+np.nan, np.zeros(grid.dims)+np.nan
+    grid.r[rrr,ccc] = cents[~nix,0] + rpos - grid.win*5
+    grid.c[rrr,ccc] = cents[~nix,1] + cpos - grid.win*5
+    
+    grid = adjust_subgrid( plate, grid, rrr, ccc )
+    
+    # Do major offset
+    val = np.logical_and( grid.r < plate.shape[0], grid.c < plate.shape[1] )
+    grr = np.floor(grid.r[val]).astype(int)
+    gcr = np.floor(grid.c[val]).astype(int)
+    pdata = np.zeros(grid.dims)
+    for ii,jj in enumerate(bean.find(bean.ind(val))):
+        r,c = bean.ind2sub(jj, grid.dims)
+        pdata[r,c] = plate[grr[ii],gcr[ii]]
+    
+    radj = grid.dims[0] - \
+        bean.find(sum(pdata>it,1) < plate.shape[1]/grid.win-grid.dims[1],0)
+    cadj = grid.dims[1] - \
+        bean.find(sum(pdata>it,0) < plate.shape[0]/grid.win-grid.dims[0],0)
+    
+    grid.r -= radj * grid.win + grid.win/2
+    grid.c -= cadj * grid.win + grid.win/2
+    
+    return grid
+    
+def estimate_initial_grid_aspect( plate, **params ):
+    if 'sizestandard' not in params:
+        params['sizestandard'] = [1853, 2765]
+    
+    # Compute grid spacing and dimensions
+    grid = initialize_grid(plate, **params)
+    dims = grid.dims
+    win = grid.win
     
     # Identify the grid orientation
     tang = params['sizestandard'][0] / (params['sizestandard'][1] + 0.0)
@@ -193,96 +329,16 @@ def estimate_initial_grid( plate, **params ):
     
     return determine_grid_from_corners( coords, grid )
 
-# Adjust grid
-def adjust_grid( plate, grid, **params ):
-    bean.default_param( params, \
-        convergethresh = 3, \
-        adjustmentwindow = int(np.round( grid.dims[0]/8.0 )), \
-        finaladjust = True, \
-        fitfunction = lambda r, c: \
-            np.hstack((np.ones((np.prod(r.shape),1)), \
-            bean.ind(r,nx1=True), bean.ind(c,nx1=True))) )
-        
-    # Subroutines
-    def measure_offset( box ):
-        win = (box.shape[0]-1)/2
-        
-        # Get centroid
-        thresh = (np.min(box) + np.max(box))/2
-        cents = bean.centroids( box > thresh )
-        cents = cents - (win+1)
-        tmp = np.all(abs(cents) < win/2,1)
-        if sum(tmp)>0:
-            return cents[bean.find(tmp,0),:]
-        else:
-            return np.nan
-        
-    def adjust_spot( plate, rpos, cpos, win ):
-        box = get_box( plate, rpos, cpos, win )
-        off = np.round(measure_offset( box ))
-        
-        if np.any(off > win/2):
-            raise Exception('Offset too large - decrease the adjustment window')
-        if np.any(np.isnan(off)):
-            return np.nan, np.nan
-        else:
-            return (rpos + off[0], cpos + off[1])
-            
-    def minor_adjust_grid( plate, grid, rrr, ccc ):
-        r0 = grid.r[0,0]
-        dims = grid.dims
-        win = grid.win
-        
-        rtmp, ctmp = bean.nans(grid.r.shape), bean.nans(grid.r.shape)
-        
-        for rr in rrr:
-            for cc in ccc:
-                rtmp[rr,cc], ctmp[rr,cc] = adjust_spot \
-                    (plate, grid.r[rr,cc], grid.c[rr,cc], win)
-        
-        # Estimate grid parameters
-        iii = np.logical_and(~np.isnan(rtmp), ~np.isnan(ctmp))
-        cc, rr = np.meshgrid( range(0, dims[1]), range(0, dims[0]) )
-        Afun = params['fitfunction']
-        
-        lq = np.linalg.lstsq
-        rfact = lq( Afun(rr[iii], cc[iii]), rtmp[iii] )[0]
-        cfact = lq( Afun(rr[iii], cc[iii]), ctmp[iii] )[0]
-        
-        # TODO - include grid.factors?
-        
-        # Compute grid position
-        grid.r = np.reshape(np.dot(Afun(rr,cc), rfact), grid.r.shape)
-        grid.c = np.reshape(np.dot(Afun(rr,cc), cfact), grid.c.shape)
-        
-        # Estimate convergence
-        fitfact = np.abs( grid.r[0,0] - r0 )
-        
-        return grid, fitfact
-
-    # End of minor_adjust_grid    
-
-    fitfact = grid.win
-    aw = params['adjustmentwindow']
+def estimate_initial_grid( plate, **params ):
+    bean.default_param( params, 
+        mode='aspectratio' )
     
-    # Initial adjustment
-    #while fitfact > params['convergethresh']:
-    for ii in [1]:
-        # Adjust internal spots
-        rrr = grid.dims[0]/2 + range(-aw, aw+1)
-        ccc = grid.dims[1]/2 + range(-aw, aw+1)
-        
-        grid, fitfact = minor_adjust_grid( plate, grid, rrr, ccc )
-        
-    # Final adjustment
-    if params['finaladjust']:
-        rrr = np.round( np.linspace(0, grid.dims[0]-1, 2*aw) )
-        ccc = np.round( np.linspace(0, grid.dims[1]-1, 2*aw) )
-        
-        grid, fitfact = minor_adjust_grid( plate, grid, rrr, ccc )
-        
-    # Extra stuff
-    return grid
+    if params['mode'] == 'aspectratio':
+        return estimate_initial_grid_aspect( plate, **params )
+    elif params['mode'] == 'offset':
+        return estimate_initial_grid_offset( plate, **params )
+    else:
+        raise Exception('Unsupported option for MODE: %s' % params['mode'])
         
 # Determine colony grid
 def determine_colony_grid( plate, **params ):
@@ -295,6 +351,56 @@ def determine_colony_grid( plate, **params ):
     # Adjust Grid
     return adjust_grid( plate, grid, **params );
        
+def manual_grid( plate, **params ):
+    
+    # Get corner points
+    fig = plt.figure(figsize=(12,8))
+    fig.suptitle('Manual Grid Alignment')
+    ax = fig.add_subplot(111)
+    ax.set_title('Please select the four corners of the colony grid')
+    ax.imshow(plate, cmap='gray')
+    def add_num(x, y, numstr):
+        ax.text(x, y, numstr, transform=ax.transAxes, color='red', 
+            fontsize=16, fontweight='bold')
+    add_num(0.05, 0.95, '1')
+    add_num(0.95, 0.95, '2')
+    add_num(0.95, 0.05, '3')
+    add_num(0.05, 0.05, '4')
+    fig.canvas.draw()
+    corners = bean.get_points(4, color='r')
+    plt.close(fig)
+    
+    # Determine grid from corners
+    print "Computing grid position..."
+    sys.stdout.flush()
+    grid = initialize_grid(plate)
+    grid = determine_grid_from_corners( corners, grid )
+
+    # Adjust Grid
+    grid = adjust_grid( plate, grid, **params )
+    
+    # Verify
+    fig = plt.figure(figsize=(12,8))
+    fig.suptitle('')
+    ax = fig.add_subplot(111)
+    ax.set_title('Is the colony grid correct? (Respond in terminal)')
+    ax.imshow(plate, cmap='gray')
+    xl, yl = plt.xlim(), plt.ylim()
+    ax.scatter(grid.c, grid.r, s=5)
+    plt.xlim(xl), plt.ylim(yl)
+    fig.canvas.draw()
+    plt.pause(0.01)
+    
+    resp = raw_input('Is the colony grid correct? Y/n/cancel: ')
+    plt.close(fig)
+    
+    if resp.lower()[0] == 'y':
+        return grid
+    elif resp.lower()[0] == 'n':
+        return manual_grid(plate, **params)
+    else:
+        return None
+    
 # View plate image
 def view_plate_image( filename, **params ):
     # Default parameters
