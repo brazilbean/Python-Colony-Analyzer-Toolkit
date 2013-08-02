@@ -18,13 +18,28 @@ import bean
 import pycat.grid as pygrid
 
 ## Classes
-class threshold_object:
-    def get_colony_box( self, plate, grid, rr, cc ):
-        return None
+class IntensityThreshold( object ):
+    def get_colony_box( self, plate, grid, row, col ):
+        return pygrid.get_box( plate, \
+            grid.r[row,col], grid.c[row,col], grid.win )
+            
     def determine_threshold( self, plate, grid, rr, cc ):
         return None
-        
-class max_min_mean_threshold( threshold_object ):
+
+    def apply_threshold( self, plate, grid ):
+        # Iterate through each position in grid
+        # - Get the box
+        # - Estimate the threshold
+        # - save the thresholded box
+        thrplate = np.zeros(plate.shape) == 1 
+        for r in range(0, grid.dims[0]):
+            for c in range(0, grid.dims[1]):
+                box = self.get_colony_box(plate, grid, r, c)
+                it = self.determine_threshold( box )
+                pygrid.set_box(thrplate, box>it, grid.r[r,c], grid.c[r,c])
+        return thrplate
+                
+class MaxMinMeanThreshold( IntensityThreshold ):
     def get_colony_box(self, plate, grid, row, col):
         return pygrid.get_box( plate, \
             grid.r[row,col], grid.c[row,col], grid.win )
@@ -35,23 +50,45 @@ class max_min_mean_threshold( threshold_object ):
             box = self.get_colony_box(plate, grid, row, col)
         return (np.max(box) + np.min(box)) / 2
         
-class local_fitted_threshold( threshold_object ):
+class LocalFittedThreshold( IntensityThreshold ):
+    bins = None
+    fdr = None
+    fast = None
+    fullplate = None
+    num_background_iters = None
+    upper_threshold_function = None
     pthresh = 4.5;
     
-    def __init__(self, pthresh=4.5):
+    def __init__(self, fdr = 0.01, fast = True, full = False, \
+                 pthresh=4.5, num_background_iters = 5, \
+                 upper_threshold_function = None):
         self.pthresh = pthresh
+        self.fdr = fdr
+        self.fast = fast
+        self.full = full
+        self.num_background_iters = num_background_iters
+        self.upper_threshold_function = upper_threshold_function
+        
+        # Full plate settings
+        if self.full and self.upper_threshold_function is not None:
+            self.upper_threshold_function = lambda box: \
+                (np.min(box) + np.max(box))/2
         
     def _get_pm_std( self, box ):
-        mb = np.min(box)
-        it = (np.max(box) + mb) / 2
-        #pm = bean.pmode(box)
-        pm = pygrid.pixelmode(box)
-        c = 5
-        while c > 0 and pm > it:
-            it = (it + mb) / 2
-            #pm = bean.pmode(box[box<it])
-            pm = pygrid.pixelmode(box[box<it])
-            c -= 1
+        if self.fast:
+            pmfun = pygrid.pixelmode
+        else:
+            pmfun = bean.pmode
+        pm = pmfun( box )
+        
+        if self.upper_threshold_function is not None:
+            it = self.upper_threshold_function( box )
+            c = self.num_background_iters
+            while c > 0 and pm > it:
+                it = (it + np.min(box))/2
+                pm = pmfun(box[box < it])
+                c = c - 1
+        
         tmp = box[box<pm] - pm
         st = np.std(np.vstack((tmp,-tmp)))
         return pm, st
@@ -86,7 +123,7 @@ class local_fitted_threshold( threshold_object ):
         bb = pvals > self.pthresh
         return np.min( box[bb] ) - 1
     
-class local_gaussian_threshold(threshold_object):
+class LocalGaussianThreshold( IntensityThreshold ):
     gplate = None
     mode = None
     sigma = None
@@ -113,7 +150,41 @@ class local_gaussian_threshold(threshold_object):
         gbox = self.get_colony_box(self.gplate, grid, row, col)
 
         return np.min(box[box>gbox])
+        
+    def apply_threshold( self, plate, grid ):
+        if self.gplate is None:
+            self._set_gplate(plate, grid)
+
+        return self.gplate
     
+class BackgroundOffset( IntensityThreshold ):
+    offset = None
+    fullplate = None
+    background_max = None
+    
+    def __init__(self, offset = 1.25, fullplate = False, background_max = None):
+        self.offset = offset
+        self.fullplate = fullplate
+        self.background_max = background_max
+        
+    def calibrate(self, plate, grid):
+        mid = pygrid.get_box \
+            (plate, np.mean(grid.r), np.mean(grid.c), grid.win*5)
+        self.background_max = (np.min(mid) + np.max(mid)) / 2
+        
+    def determine_threshold(self, box):
+        if self.fullplate:
+            bg = pygrid.pixelmode(box[box < self.background_max])
+        else:
+            bg = pygrid.pixelmode(box)
+            
+        it = bg * self.offset
+        
+    def apply_threshold(self, plate, grid):
+        if self.fullplate and self.background_max is None:
+            self.calibrate(plate, grid)
+        return super(BackgroundOffset, self).apply_threshold(plate, grid)
+        
 ## Methods
 def local_gaussian(plate, grid=None, sigma=None, mode='reflect', offset=0):
     if sigma is None:
