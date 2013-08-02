@@ -10,8 +10,7 @@ import matplotlib.pyplot as plt
 import sys
 
 # Bean's bag-o-tricks
-sys.path.append('/cellar/users/gbean/Dropbox/pyfiles')
-import bean
+import bean # https://github.com/brazilbean/bean-python-toolkit
 
 # pycat imports
 import pycat.io as io

@@ -10,9 +10,7 @@ import scipy
 from scipy import stats as pystat
 
 # Bean's bag-o-tricks
-import sys
-sys.path.append('/cellar/users/gbean/Dropbox/pyfiles')
-import bean
+import bean # https://github.com/brazilbean/bean-python-toolkit
 
 # pycat imports
 import pycat.grid as pygrid

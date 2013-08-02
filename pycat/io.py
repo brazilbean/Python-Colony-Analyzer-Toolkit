@@ -5,9 +5,7 @@
 ## pycat.io Module
 
 # Imports
-import sys
-sys.path.append('/cellar/users/gbean/Dropbox/pyfiles')
-import bean
+import bean # https://github.com/brazilbean/bean-python-toolkit
 
 import pickle
 import os

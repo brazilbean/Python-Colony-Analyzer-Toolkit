@@ -10,9 +10,7 @@ import matplotlib.pyplot as plt
 import scipy.ndimage as si
 
 # Bean's bag-o-tricks
-import sys
-sys.path.append('/cellar/users/gbean/Dropbox/pyfiles')
-import bean
+import bean # https://github.com/brazilbean/bean-python-toolkit
 
 ## Functions
 def pseudoplate( colsizes, **params ):
