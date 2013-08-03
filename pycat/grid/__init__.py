@@ -95,8 +95,13 @@ class GridMethod(object):
         
 
 class GridOffsetMethod(GridMethod):
+    _size_standard = None
+    _init_grid_dims = None
+    
     def __init__(self, **kwargs):
         GridMethod.__init__(self)
+        self._size_standard = np.array([1853.0, 2765.0])
+        self._init_grid_dims = np.array([8, 8])
         
     def fit_grid(self, plate):
         # Initialize grid 
@@ -123,26 +128,51 @@ class GridOffsetMethod(GridMethod):
         # Sign the package
         grid.info['grid'] = self
 
+    def estimate_grid_orientation(self, plate, grid):
+        tang = self._size_standard[0] / self._size_standard[1]
+        ratiofun = lambda xp, yp: np.arctan( -(yp-xp*tang)/(yp*tang-xp) )
+        yp, xp = plate.shape
+        
+        theta = ratiofun( xp, yp )
+        if (np.mean(plate[0,np.floor(xp/2):]) \
+            > np.mean(plate[0,0:np.floor(xp/2)])):
+            # The left side of the top border is brighter than the right side
+            #  so the plate is rotated right instead of left
+            theta = -theta
+            
+        return theta
 
+    def compute_initial_placement(self, plate, grid):
+        # Drop into plate - get initial position
+        rpos, cpos = np.array(plate.shape)/2
+        r0, c0 = gtools.adjust_spot( plate, rpos, cpos, grid.win )
+        
+        # Determine the initial grid positions
+        colpositions = range(0, self._init_grid_dims[1]-1) * grid.win
+        rowpositions = range(0, self._init_grid_dims[0]-1) * grid.win
+        cc0, rr0 = np.meshgrid(colpositions, rowpositions)
+        
+        # Define the initial grid coordinates (top-left corner of grid)
+        ri = range(0, self._init_grid_dims[0]-1)
+        ci = range(0, self._init_grid_dims[1]-1)
+        grid.r[ri,ci] = rr0
+        grid.c[ri,ci] = cc0
+        
+        # Rotate the grid according to the orientation estimate
+        theta = self.estimate_grid_orientation(plate, grid)
+        rotmat = np.array([[np.cos(theta), -np.sin(theta)], \
+                           [np.sin(theta),  np.cos(theta)]])
+        val = ~np.isnan(grid.r)
+        tmp = np.dot(rotmat, np.vstack((grid.c[val], grid.r[val])))
+        
+        # Assign position coordinates
+        grid.r[val] = r0 + tmp[1,:]
+        grid.c[val] = c0 + tmp[0,:]
+        
+        return grid
 
-
-
-
-
-def initialize_grid( plate, **params ):
-    grid = Grid()
-
-    # Compute grid spacing and dimensions
-    if 'gridspacing' not in params:
-        params['gridspacing'] = estimate_grid_spacing( plate );
-    grid.win = params['gridspacing']
     
-    if 'dimensions' not in params:
-        params['dimensions'] = estimate_dimensions( plate, grid.win );
-    grid.dims = params['dimensions']
 
-    return grid
-    
 # Estimate initial grid
 def estimate_initial_grid_offset( plate, **params ):
     grid = initialize_grid(plate, **params)

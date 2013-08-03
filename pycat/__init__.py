@@ -1,59 +1,55 @@
 ## PyCAT - Python Colony Analyzer Toolkit
 # Gordon Bean, gbean@ucsd.edu
 
-## Modules
-import io, grid, threshold, quantify, analysis
+## TODO
+# Load grid coordinate option
+# Multiple metrics option
+# Fix view_plate_image
 
-# __all__ definintion
-__all__ = ['io','grid','threshold','quantify', 'analysis']
+## Modules
+import io as _io
+import grid as _grid
+import threshold as _threshold
+import quantify as _quantify
 
 # More Imports
 import numpy as np
+import matplotlib.pyplot as plt
 import pickle
 
 # Bean's bag-o-tricks
 import bean # https://github.com/brazilbean/bean-python-toolkit
 
-# pycat imports
-import pycat.grid as pygrid
-import pycat.threshold as pythresh
-import pycat.quantify as pyquant
+def measure_colony_sizes( plate, 
+    imgloader = _io.PlateLoader(),
+    grid = _grid.OffsetAutoGrid(),
+    threshold = _threshold.BackgroundOffset(),
+    metric = _quantify.ColonyArea() ):
 
-def measure_colony_sizes( plate, **params ):
-    bean.default_param( params, 
-        manualgrid = False, 
-        thresholdfunction = pythresh.local_gaussian, 
-        sizefunction = pyquant.threshold_bounded )
-
-    # Load plate
+    ## Load plate
     if isinstance(plate, basestring):
         # "plate" is the file name
-        plate = io.load_plate(plate)
-    
-    # Average plate across RGB
-    if len(plate.shape) > 2:
-        plate = np.mean(plate,2)
+        plate = imgloader(plate)
+        plate.info['imgloader'] = imgloader
         
-    # Determine grid
-    if params['manualgrid']:
-        params['grid'] = pygrid.manual_grid(plate, **params)
-        if params['grid'] is None:
-            # The user canceled the alignment
-            return None, None
     else:
-        if 'grid' not in params:
-            params['grid'] = pygrid.determine_colony_grid( plate, **params )
-    
-    pgrid = params['grid']
-    
-    # Intensity thresholds
+        # "plate" is the actual image - assume it is pre-processed
+        pass
+        
+    ## Determine grid
+    if isinstance(grid, _grid.Grid):
+        pgrid = grid
+    else:
+        pgrid = grid(plate)
+
+    ## Intensity thresholds
     if not hasattr(pgrid, 'thresh'):
-        pgrid.thresh = params['thresholdfunction']( plate, pgrid )
+        pgrid.thresh = threshold( plate, pgrid )
     
     # Measure colony size
-    size_fun = params['sizefunction']
+    pgrid.info['metric'] = metric
     rrr, ccc = range(0, pgrid.dims[0]), range(0, pgrid.dims[1])
-    sizes = [ [ size_fun( plate, pgrid, r, c ) for c in ccc] for r in rrr];
+    sizes = [ [ metric( plate, pgrid, r, c ) for c in ccc] for r in rrr];
   
     return np.array(sizes), pgrid
     
@@ -116,5 +112,136 @@ def analyze_directory_of_images( imagedir, **params ):
                 analyze_image( ff, **params )
             except Exception:
                 print "Image failed: \n %s \n" % ff
-            
+           
+# View plate image
+def view_plate_image( filename, **params ):
+    # Default parameters
+    bean.default_param( params, \
+        showimage = True, \
+        interactive = False, \
+        showgrid = False, \
+        shownotes = True, \
+        showaxes = False, \
+        notes = [], \
+        returnnotes = False, \
+        applythreshold = False, \
+        maskthreshold = False )
+    bean.default_param( params, newfigure = params['interactive'] )
+    bean.default_param( params, \
+        gridspecs = {'s': 10, 'c':'#0000FF', 'marker':'o'}, \
+        notespecs = {'s': 20, 'c':'#FF0000', 'marker':'o','alpha':0.5} )
     
+    # Load image and image info
+    if isinstance(filename, basestring):
+        plate = _io.load_plate( filename )
+    else:
+        # Assume filename is the plate
+        plate = filename
+    
+    # Show image
+    if params['newfigure']:
+        fig = plt.figure()
+    else:
+        fig = plt.gcf()
+    
+    def show_plate():
+        plt.clf()
+        plt.imshow(plate, aspect='auto', interpolation='none', cmap='gray' )
+    show_plate()
+    xl = plt.xlim();
+    yl = plt.ylim();
+    ax = fig.gca();
+        
+    # Show grid
+    if 'grid' not in params:
+        grid = _grid.determine_colony_grid( plate )
+    else:
+        grid = params['grid']
+    
+    
+    if params['showgrid']:
+        gax = fig.add_axes(ax.get_position().bounds, frameon=False)
+        plt.xlim(xl)
+        plt.ylim(yl)
+        def show_grid():
+            plt.sca(gax)
+            plt.cla()
+            plt.scatter(grid.c, grid.r, **params['gridspecs']) 
+            plt.xlim(xl)
+            plt.ylim(yl)
+            #fig.canvas.draw()
+        show_grid()
+
+    # Show notes
+    notes = np.zeros(grid.dims) == 1
+    for note in params['notes']:
+        r, c = bean.ind2sub(note, grid.dims)
+        notes[r,c] = True
+    if params['shownotes']:
+        nax = fig.add_axes(ax.get_position().bounds, frameon=False)
+        plt.xlim(xl)
+        plt.ylim(yl)
+        def show_notes(notes):
+            plt.sca(nax)
+            plt.cla()
+            plt.scatter(grid.c[notes], grid.r[notes], **params['notespecs'])
+            plt.xlim(xl)
+            plt.ylim(yl)
+            fig.canvas.draw()
+        if np.any(notes):
+            show_notes(notes)
+    
+    # Interactive figure
+    if params['interactive']:
+        class clicked:
+            click = False
+            def __init__(self):
+                self.click = False
+            def on(self):
+                self.click = True
+            def off(self):
+                self.click = False
+            def isclicked(self):
+                return self.click
+        click = clicked()
+                
+        def get_coords(event):
+            r, c = event.ydata, event.xdata
+            foo = np.abs(grid.r - r) + abs(grid.c-c)
+            r, c = bean.ind2sub(np.argmin(foo), grid.dims)
+            return r, c
+            
+        def toggle_note(r, c):
+            notes[r,c] = ~notes[r,c]
+            pass
+            
+        def onclick(event):
+            if click.isclicked():
+                return
+            else:
+                click.on()
+                # Get grid coordinate
+                r, c = get_coords(event)
+                #print r, c
+                
+                # Toggle note
+                toggle_note(r, c)
+                #print notes[r,c]
+                
+                # Refresh image
+                if params['shownotes'] and np.any(notes):
+                    show_notes(notes)
+                click.off()
+            
+        fig.canvas.mpl_connect('button_press_event', onclick)
+        
+    plt.draw()
+    plt.show()
+    if params['returnnotes']:
+        return notes
+             
+## Finish up __init__
+
+import io, grid, threshold, quantify, analysis
+__all__ = ['io','grid','threshold','quantify', 'analysis']
+
