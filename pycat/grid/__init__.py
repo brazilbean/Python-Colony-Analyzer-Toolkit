@@ -171,7 +171,19 @@ class GridOffsetMethod(GridMethod):
         
         return grid
 
-    
+    def perform_initial_adjustment( self, plate, grid ):
+        # Extrapolate grid
+        rrr, ccc = np.nonzero(~np.isnan(grid.r))
+        grid = gtools.adjust_grid_polar( plate, grid, rrr, ccc )
+        
+        # Fit diagonal of grid (to get a more robust fit)
+        cc, rr = np.meshgrid(range(0,grid.dims[1]), range(0,grid.dims[0]))
+        foo = np.round(grid.dims[0]/grid.dims[1] * cc) == rr
+        rrr, ccc = np.nonzero(foo)
+        iii = range(0, grid.dims[1])
+        grid = gtools.adjust_grid_polar( plate, grid, rrr[iii], ccc[iii] )
+        
+        return grid
 
 # Estimate initial grid
 def estimate_initial_grid_offset( plate, **params ):

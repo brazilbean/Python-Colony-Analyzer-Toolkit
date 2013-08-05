@@ -141,19 +141,23 @@ def adjust_spot( plate, rpos, cpos, win ):
     else:
         return (rpos + off[0], cpos + off[1])
 
+# Default coefficient function
+def default_coefficient_function( r, c ):
+    return np.hstack(( 
+        np.ones((np.prod(r.shape),1)), 
+        bean.ind(r,nx1=True), 
+        bean.ind(c,nx1=True) ))
+        
 # adjust_subgrid
-def adjust_subgrid( plate, grid, rrr, ccc, **params ):
-    bean.default_param(params, 
-        coeffunction = lambda r, c: 
-            np.hstack((np.ones((np.prod(r.shape),1)), 
-            bean.ind(r,nx1=True), bean.ind(c,nx1=True))) )
+def adjust_grid_linear( plate, grid, rrr, ccc, 
+    coeffunction = default_coefficient_function ):
         
     dims = grid.dims
     win = grid.win
-    coeffun = params['coeffunction']
     
     rtmp, ctmp = bean.nans(grid.r.shape), bean.nans(grid.r.shape)
     
+    # Find true colony locations
     for rr, cc in zip(bean.ind(rrr),bean.ind(ccc)):
         rtmp[rr,cc], ctmp[rr,cc] = adjust_spot \
             (plate, grid.r[rr,cc], grid.c[rr,cc], win)
@@ -163,44 +167,104 @@ def adjust_subgrid( plate, grid, rrr, ccc, **params ):
     cc, rr = np.meshgrid( range(0, dims[1]), range(0, dims[0]) )
     
     lq = np.linalg.lstsq
-    rfact = lq( coeffun(rr[iii], cc[iii]), rtmp[iii] )[0]
-    cfact = lq( coeffun(rr[iii], cc[iii]), ctmp[iii] )[0]
+    rfact = lq( coeffunction(rr[iii], cc[iii]), rtmp[iii] )[0]
+    cfact = lq( coeffunction(rr[iii], cc[iii]), ctmp[iii] )[0]
     
     # TODO - include grid.factors?
     
     # Compute grid position
-    grid.r = np.reshape(np.dot(coeffun(rr,cc), rfact), grid.r.shape)
-    grid.c = np.reshape(np.dot(coeffun(rr,cc), cfact), grid.c.shape)
+    grid.r = np.reshape(np.dot(coeffunction(rr,cc), rfact), grid.r.shape)
+    grid.c = np.reshape(np.dot(coeffunction(rr,cc), cfact), grid.c.shape)
     
     return grid
 
-# Adjust grid
-def adjust_grid( plate, grid, **params ):
-    bean.default_param( params, \
-        convergethresh = 3, \
-        adjustmentwindow = int(np.round( grid.dims[0]/8.0 )), \
-        finaladjust = True )
+def adjust_grid_polar( plate, grid, rrr, ccc ):
+    '''Adjust the grid using polar coordinates.
+    This method's strength is that it combines spacing and positions information
+    from both the rows and the columns. It tends to be biased in accuracy
+    towards the top-left corner.
+    Note that rrr and ccc are paired subscripts, as returned from numpy.nonzero.
+    '''
     
-    aw = params['adjustmentwindow']
+    dims = grid.dims
+    win = grid.win
+    rtmp, ctmp = bean.nans(grid.r.shape), bean.nans(grid.r.shape)
     
-    # Initial adjustment
-    #while fitfact > params['convergethresh']:
-    for ii in [1]:
-        # Adjust internal spots
-        rrr = grid.dims[0]/2 + np.array(range(-aw, aw+1))
-        ccc = grid.dims[1]/2 + np.array(range(-aw, aw+1))
-        ccc, rrr = np.meshgrid( ccc, rrr )
-        
-        grid = adjust_subgrid( plate, grid, rrr, ccc, **params )
-        
-    # Final adjustment
-    if params['finaladjust']:
-        rrr = np.round( np.linspace(0, grid.dims[0]-1, 2*aw) )
-        ccc = np.round( np.linspace(0, grid.dims[1]-1, 2*aw) )
-        ccc, rrr = np.meshgrid(ccc, rrr)
-        
-        grid = adjust_subgrid( plate, grid, rrr, ccc, **params )
-        
-    # Extra stuff
+    # Find true colony locations
+    for rr, cc in zip(bean.ind(rrr),bean.ind(ccc)):
+        rtmp[rr,cc], ctmp[rr,cc] = adjust_spot \
+            (plate, grid.r[rr,cc], grid.c[rr,cc], win)
+    
+    ## Convert to polar coordinates
+    # Set top-left coordinate as reference
+    ii = bean.find(~np.isnan(rtmp),1)
+    r0, c0 = rtmp[ii], ctmp[ii]
+    
+    # Set all positions relative to reference
+    rpos = rtmp - r0
+    cpos = ctmp - c0
+    
+    # Compute rho (radius)
+    rho = np.sqrt(rpos**2 + cpos**2)
+    
+    # Compute theta
+    theta = np.atan2(-rpos, cpos)
+    
+    ## Compute expected positions (in polar)
+    cc, rr = np.meshgrid( range(0, dims[1]), range(0, dims[0]) )
+    r0i, c0i = np.ind2sub(dims, ii)
+    rr = rr - r0i
+    cc = cc - c0i
+    
+    rho_exp = np.sqrt(rr**2 + cc**2)
+    theta_exp = np.atan2(-rr,cc)
+    
+    # Get theta factor
+    theta_fact = np.median(theta - theta_exp)
+    
+    # Get rho factor
+    rho_fact = np.median(rho / rho_exp)
+    
+    ## Return cartesian, updated coordinates
+    grid.r = -rho_fact * rho_exp * np.sin(theta_exp + theta_fact) + r0
+    grid.c = rho_fact * rho_exp * np.cos(theta_exp + theta_fact) + c0
+    
+    grid.info['theta'] = theta_fact
+    
+    if np.all(np.isnan(grid.r)):
+        # TODO - throw an error - NaN grid.
+        pass
+    
     return grid
-        
+    
+    
+# Adjust grid
+#def adjust_grid( plate, grid, **params ):
+#    bean.default_param( params, \
+#        convergethresh = 3, \
+#        adjustmentwindow = int(np.round( grid.dims[0]/8.0 )), \
+#        finaladjust = True )
+#    
+#    aw = params['adjustmentwindow']
+#    
+#    # Initial adjustment
+#    #while fitfact > params['convergethresh']:
+#    for ii in [1]:
+#        # Adjust internal spots
+#        rrr = grid.dims[0]/2 + np.array(range(-aw, aw+1))
+#        ccc = grid.dims[1]/2 + np.array(range(-aw, aw+1))
+#        ccc, rrr = np.meshgrid( ccc, rrr )
+#        
+#        grid = adjust_subgrid( plate, grid, rrr, ccc, **params )
+#        
+#    # Final adjustment
+#    if params['finaladjust']:
+#        rrr = np.round( np.linspace(0, grid.dims[0]-1, 2*aw) )
+#        ccc = np.round( np.linspace(0, grid.dims[1]-1, 2*aw) )
+#        ccc, rrr = np.meshgrid(ccc, rrr)
+#        
+#        grid = adjust_subgrid( plate, grid, rrr, ccc, **params )
+#        
+#    # Extra stuff
+#    return grid
+#        
