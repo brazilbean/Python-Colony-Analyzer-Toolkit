@@ -87,6 +87,14 @@ def load_plate(filename):
     img = load_image(filename);
     return crop_image(img);
 
+class PlateLoader(object):
+    def __init__(self):
+        pass
+    def __call__(self, *args, **kwargs):
+        return self.load_plate(*args, **kwargs)
+    def load_plate(self, filename):
+        return crop_image( load_image(filename) )
+
 def load_grid( filename ):
     """ Loads the grid information from the associated .info.pkl file. """
     return pickle.load( open(get_info_pkl_file( filename )) )

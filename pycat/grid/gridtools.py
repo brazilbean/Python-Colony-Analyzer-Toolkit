@@ -124,7 +124,7 @@ def measure_offset( box ):
     thresh = (np.min(box) + np.max(box))/2
     cents = bean.centroids( box > thresh )
     cents = cents - (win+1)
-    tmp = np.all(abs(cents) < win/2,1)
+    tmp = np.all(np.abs(cents) < win/2,1)
     if sum(tmp)>0:
         return cents[bean.find(tmp,0),:]
     else:

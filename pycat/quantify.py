@@ -11,9 +11,9 @@ import numpy as np
 import bean # https://github.com/brazilbean/bean-python-toolkit
 
 # pycat imports
-import pycat.grid as pygrid
-import pycat.io as io
-import pycat.threshold as pythresh
+import grid as pygrid
+#import pycat.io as io
+#import pycat.threshold as pythresh
 
 ## Methods
 def find_colony_borders( box, bbox=None ):

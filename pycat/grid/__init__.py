@@ -6,15 +6,16 @@
 
 # Imports
 import numpy as np
-import sys
+import scipy
+#import pyplot as plt
 import copy
 
 # Bean's bag-o-tricks
 import bean # https://github.com/brazilbean/bean-python-toolkit
 
 # pycat imports
-import pycat.grid.gridtools as gtools
-import pycat.io as io
+import gridtools as gtools
+#import pycat.io as io
 
 ## Classes
 class Grid:
@@ -94,7 +95,7 @@ class GridMethod(object):
         return grid
         
 
-class GridOffsetMethod(GridMethod):
+class OffsetGridMethod(GridMethod):
     _size_standard = None
     _init_grid_dims = None
     
@@ -107,20 +108,14 @@ class GridOffsetMethod(GridMethod):
         # Initialize grid 
         grid = self.initialize_grid(plate)
         
-        # Identify grid orientation
-        grid = self.estimate_grid_orientation(plate, grid)
-        
         # Compute initial placement
         grid = self.compute_initial_placement(plate, grid)
         
         # Perform initial adjustment
         grid = self.perform_initial_adjustment(plate, grid)
         
-        # Determine grid-colony overlap
-        overlap = self.determine_overlap(plate, grid)
-        
         # Correct grid offset
-        grid = self.correct_offset_grid(grid, overlap)
+        grid = self.correct_offset_grid(plate, grid)
         
         # Make final adjustments
         grid = self.make_final_adjustments(plate, grid)
@@ -148,8 +143,8 @@ class GridOffsetMethod(GridMethod):
         r0, c0 = gtools.adjust_spot( plate, rpos, cpos, grid.win )
         
         # Determine the initial grid positions
-        colpositions = range(0, self._init_grid_dims[1]-1) * grid.win
-        rowpositions = range(0, self._init_grid_dims[0]-1) * grid.win
+        colpositions = np.arange(0, self._init_grid_dims[1]-1) * grid.win
+        rowpositions = np.arange(0, self._init_grid_dims[0]-1) * grid.win
         cc0, rr0 = np.meshgrid(colpositions, rowpositions)
         
         # Define the initial grid coordinates (top-left corner of grid)
@@ -185,148 +180,119 @@ class GridOffsetMethod(GridMethod):
         
         return grid
 
-# Estimate initial grid
-def estimate_initial_grid_offset( plate, **params ):
-    grid = initialize_grid(plate, **params)
-    
-    # Drop into plate - get initial position
-    rpos, cpos = np.array(plate.shape)/2
-    rpos, cpos = adjust_spot( plate, rpos, cpos, grid.win )
-    
-    box = get_box(plate, rpos, cpos, grid.win*5)
-    
-    # Get initial placement
-    it = estimate_intensity_threshold(plate)
-    cents = bean.centroids(box>it)
-    cents = cents[ ~np.any(np.isnan(cents),1), :]
-    
-    tmp = np.round(cents/grid.win)
-    nix = np.any(np.logical_or(tmp < 1,tmp==np.max(tmp,0)),1)
-    rrr, ccc = tmp[~nix,0].astype(int), tmp[~nix,1].astype(int)
-    
-    grid.r, grid.c = np.zeros(grid.dims)+np.nan, np.zeros(grid.dims)+np.nan
-    grid.r[rrr,ccc] = cents[~nix,0] + rpos - grid.win*5
-    grid.c[rrr,ccc] = cents[~nix,1] + cpos - grid.win*5
-    
-    grid = adjust_subgrid( plate, grid, rrr, ccc )
-    
-    # Do major offset
-    val = np.logical_and( grid.r < plate.shape[0], grid.c < plate.shape[1] )
-    grr = np.floor(grid.r[val]).astype(int)
-    gcr = np.floor(grid.c[val]).astype(int)
-    pdata = np.zeros(grid.dims)
-    for ii,jj in enumerate(bean.find(bean.ind(val))):
-        r,c = bean.ind2sub(jj, grid.dims)
-        pdata[r,c] = plate[grr[ii],gcr[ii]]
-    
-    radj = grid.dims[0] - \
-        bean.find(sum(pdata>it,1) < plate.shape[1]/grid.win-grid.dims[1],0)
-    cadj = grid.dims[1] - \
-        bean.find(sum(pdata>it,0) < plate.shape[0]/grid.win-grid.dims[0],0)
-    
-    grid.r -= radj * grid.win + grid.win/2
-    grid.c -= cadj * grid.win + grid.win/2
-    
-    return grid
-    
-def estimate_initial_grid_aspect( plate, **params ):
-    if 'sizestandard' not in params:
-        params['sizestandard'] = [1853, 2765]
-    
-    # Compute grid spacing and dimensions
-    grid = initialize_grid(plate, **params)
-    dims = grid.dims
-    win = grid.win
-    
-    # Identify the grid orientation
-    tang = params['sizestandard'][0] / (params['sizestandard'][1] + 0.0)
-    ratiofun = lambda xp, yp: np.arctan( -(yp-xp*tang)/(yp*tang-xp) )
-    yp, xp = plate.shape
-    
-    theta = ratiofun( xp, yp );
-    if (np.mean(plate[0,np.floor(xp/2):]) > np.mean(plate[0,0:np.floor(xp/2)])):
-        theta = -theta
+    def determine_overlap( self, plate, grid ):
+        # Determine which grid positions overlap with colonies and use 
+        #  this information to determine the grid offset. 
+        overlap = np.zeros(grid.dims) * np.nan
         
-    rotmat = np.array([[np.cos(theta), -np.sin(theta)],\
-        [np.sin(theta), np.cos(theta)]])
-    y, x = dims * win
-    
-    tmp = np.array([[-x/2, -y/2],[x/2, -y/2],[x/2, y/2],[-x/2, y/2]])
-    coords = np.transpose(np.dot( rotmat, np.transpose(tmp) ))
-    coords = coords + np.array([plate.shape[1], plate.shape[0]])/2
-    
-    return determine_grid_from_corners( coords, grid )
-
-def estimate_initial_grid( plate, **params ):
-    bean.default_param( params, 
-        mode='aspectratio' )
-    
-    if params['mode'] == 'aspectratio':
-        return estimate_initial_grid_aspect( plate, **params )
-    elif params['mode'] == 'offset':
-        return estimate_initial_grid_offset( plate, **params )
-    else:
-        raise Exception('Unsupported option for MODE: %s' % params['mode'])
+        # Use correlation with a 2D gaussian to identify colonies
+        gaus = scipy.stats.norm.pdf( np.linspace(-3, 3, np.fix(grid.win/2)) )
+        gbox = gaus * bean.tr(gaus)
+        rmax = bean.find(np.max(grid.r,axis=1) < plate.shape[0]-grid.win, -1)
+        cmax = bean.find(np.max(grid.c,axis=0) < plate.shape[1]-grid.win, -1)
         
-# Determine colony grid
-def determine_colony_grid( plate, **params ):
-    # Compute Grid
-    if 'initialgrid' in params:
-        grid = params['initialgrid'];
-    else:
-        grid = estimate_initial_grid( plate, **params );
-         
-    # Adjust Grid
-    return adjust_grid( plate, grid, **params );
-       
-def manual_grid( plate, **params ):
+        # Determine colony overlap for relevant positions
+        for rr in range(0, rmax):
+            for cc in range(0, cmax):
+                box = gtools.get_box \
+                    (plate, grid.r[rr,cc], grid.c[rr,cc], grid.win/2)
+                overlap[rr,cc] = np.corr(box, gbox)
+        return overlap
     
-    # Get corner points
-    fig = plt.figure(figsize=(12,8))
-    fig.suptitle('Manual Grid Alignment')
-    ax = fig.add_subplot(111)
-    ax.set_title('Please select the four corners of the colony grid')
-    ax.imshow(plate, cmap='gray')
-    def add_num(x, y, numstr):
-        ax.text(x, y, numstr, transform=ax.transAxes, color='red', 
-            fontsize=16, fontweight='bold')
-    add_num(0.05, 0.95, '1')
-    add_num(0.95, 0.95, '2')
-    add_num(0.95, 0.05, '3')
-    add_num(0.05, 0.05, '4')
-    fig.canvas.draw()
-    corners = bean.get_points(4, color='r')
-    plt.close(fig)
-    
-    # Determine grid from corners
-    print "Computing grid position..."
-    sys.stdout.flush()
-    grid = initialize_grid(plate)
-    grid = determine_grid_from_corners( corners, grid )
-
-    # Adjust Grid
-    grid = adjust_grid( plate, grid, **params )
-    
-    # Verify
-    fig = plt.figure(figsize=(12,8))
-    fig.suptitle('')
-    ax = fig.add_subplot(111)
-    ax.set_title('Is the colony grid correct? (Respond in terminal)')
-    ax.imshow(plate, cmap='gray')
-    xl, yl = plt.xlim(), plt.ylim()
-    ax.scatter(grid.c, grid.r, s=5)
-    plt.xlim(xl), plt.ylim(yl)
-    fig.canvas.draw()
-    plt.pause(0.01)
-    
-    resp = raw_input('Is the colony grid correct? Y/n/cancel: ')
-    plt.close(fig)
-    
-    if resp.lower()[0] == 'y':
+    def correct_offset_grid( self, plate, grid ):
+        # Find the last row and column that are filled with colonies
+        overlap = self.determine_overlap( plate, grid )
+        correlation_threshold = 0.15
+        
+        roff = bean.find \
+            (bean.nanmean(overlap,axis=1) < correlation_threshold, 0)
+        if np.isempty(roff):
+            roff = bean.find \
+                (bean.nanmean(overlap,axis=1) > correlation_threshold, -1) + 1
+                
+        coff = bean.find \
+            (bean.nanmean(overlap,axis=0) < correlation_threshold, 0)
+        if np.isempty(coff):
+            coff = bean.find \
+                (bean.nanmean(overlap,axis=0) > correlation_threshold, -1) + 1
+        
+        # Reassign grid locations according to the coordinate offsets
+        tmpr = grid.r
+        tmpc = grid.c
+        grid.r = np.zeros(grid.dims) * np.nan
+        grid.c = np.zeros(grid.dims) * np.nan
+        
+        grid.r[-roff:,-coff:] = tmpr[:roff,:coff]
+        grid.c[-roff:,-coff:] = tmpc[:roff,:coff]
+        
         return grid
-    elif resp.lower()[0] == 'n':
-        return manual_grid(plate, **params)
-    else:
-        return None
-    
+        
+    def make_final_adjustments( self, plate, grid ):
+        # Find known locations
+        ri, ci = np.nonzero(~np.isnan(grid.r))
+        ri = ri[0]
+        ci = ci[0]
+        
+        # Extrapolate full grid positions based on the known locations
+        grid = gtools.adjust_grid_linear( plate, grid, 
+            range(ri, grid.dims[0], 2), range(ci, grid.dims[1], 2) )
+        
+        # Final adjustment over full grid
+        grid = gtools.adjust_grid_linear( plate, grid, 
+            range(0, grid.dims[0]), range(0, grid.dims[1]) )
+        # Note: MCAT has two rounds of full adjustment. Is this necessary?
+        
+        return grid
 
+#
+#def manual_grid( plate, **params ):
+#    
+#    # Get corner points
+#    fig = plt.figure(figsize=(12,8))
+#    fig.suptitle('Manual Grid Alignment')
+#    ax = fig.add_subplot(111)
+#    ax.set_title('Please select the four corners of the colony grid')
+#    ax.imshow(plate, cmap='gray')
+#    def add_num(x, y, numstr):
+#        ax.text(x, y, numstr, transform=ax.transAxes, color='red', 
+#            fontsize=16, fontweight='bold')
+#    add_num(0.05, 0.95, '1')
+#    add_num(0.95, 0.95, '2')
+#    add_num(0.95, 0.05, '3')
+#    add_num(0.05, 0.05, '4')
+#    fig.canvas.draw()
+#    corners = bean.get_points(4, color='r')
+#    plt.close(fig)
+#    
+#    # Determine grid from corners
+#    print "Computing grid position..."
+#    sys.stdout.flush()
+#    grid = initialize_grid(plate)
+#    grid = determine_grid_from_corners( corners, grid )
+#
+#    # Adjust Grid
+#    grid = adjust_grid( plate, grid, **params )
+#    
+#    # Verify
+#    fig = plt.figure(figsize=(12,8))
+#    fig.suptitle('')
+#    ax = fig.add_subplot(111)
+#    ax.set_title('Is the colony grid correct? (Respond in terminal)')
+#    ax.imshow(plate, cmap='gray')
+#    xl, yl = plt.xlim(), plt.ylim()
+#    ax.scatter(grid.c, grid.r, s=5)
+#    plt.xlim(xl), plt.ylim(yl)
+#    fig.canvas.draw()
+#    plt.pause(0.01)
+#    
+#    resp = raw_input('Is the colony grid correct? Y/n/cancel: ')
+#    plt.close(fig)
+#    
+#    if resp.lower()[0] == 'y':
+#        return grid
+#    elif resp.lower()[0] == 'n':
+#        return manual_grid(plate, **params)
+#    else:
+#        return None
+#    
+#
