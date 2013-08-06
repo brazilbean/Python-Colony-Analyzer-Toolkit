@@ -5,12 +5,23 @@
 ## pycat.grid.gridtools Module
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 # Bean's bag-o-tricks
 import bean # https://github.com/brazilbean/bean-python-toolkit
 
 ## Methods
 # Get box
+def overlay_grid(plate, grid):
+    plt.clf()
+    plt.imshow(plate, cmap='gray')
+    xl = plt.xlim()
+    yl = plt.ylim()
+    plt.scatter(grid.c, grid.r, s=20, c='b')
+    plt.xlim(xl)
+    plt.ylim(yl)
+    plt.show()
+
 def get_box(plate, rpos, cpos, win):
     """ Returns a copy of the data in plate centered at (rpos,cpos) 
          within a window of 2*win """
@@ -131,7 +142,12 @@ def measure_offset( box ):
         return np.nan
         
 def adjust_spot( plate, rpos, cpos, win ):
+    if np.isnan(rpos) or np.isnan(cpos):
+        return np.nan, np.nan
+    
     box = get_box( plate, rpos, cpos, win )
+    if box.size == 0:
+        return np.nan, np.nan
     off = np.round(measure_offset( box ))
     
     if np.any(off > win/2):
@@ -149,12 +165,16 @@ def default_coefficient_function( r, c ):
         bean.ind(c,nx1=True) ))
         
 # adjust_subgrid
-def adjust_grid_linear( plate, grid, rrr, ccc, 
+def adjust_grid_linear( plate, grid, rrr = None, ccc = None, 
     coeffunction = default_coefficient_function ):
-        
+    
     dims = grid.dims
     win = grid.win
     
+    if rrr is None or ccc is None:
+        # Do a full fit
+        ccc, rrr = np.meshgrid(range(0, dims[1]), range(0, dims[2]))
+                
     rtmp, ctmp = bean.nans(grid.r.shape), bean.nans(grid.r.shape)
     
     # Find true colony locations
@@ -197,8 +217,8 @@ def adjust_grid_polar( plate, grid, rrr, ccc ):
     
     ## Convert to polar coordinates
     # Set top-left coordinate as reference
-    ii = bean.find(~np.isnan(rtmp),1)
-    r0, c0 = rtmp[ii], ctmp[ii]
+    ri, ci = np.nonzero(~np.isnan(rtmp))
+    r0, c0 = rtmp[ri[0],ci[0]], ctmp[ri[0],ci[0]]
     
     # Set all positions relative to reference
     rpos = rtmp - r0
@@ -208,22 +228,21 @@ def adjust_grid_polar( plate, grid, rrr, ccc ):
     rho = np.sqrt(rpos**2 + cpos**2)
     
     # Compute theta
-    theta = np.atan2(-rpos, cpos)
+    theta = np.arctan2(-rpos, cpos)
     
     ## Compute expected positions (in polar)
     cc, rr = np.meshgrid( range(0, dims[1]), range(0, dims[0]) )
-    r0i, c0i = np.ind2sub(dims, ii)
-    rr = rr - r0i
-    cc = cc - c0i
+    rr = rr - ri[0]
+    cc = cc - ci[0]
     
     rho_exp = np.sqrt(rr**2 + cc**2)
-    theta_exp = np.atan2(-rr,cc)
+    theta_exp = np.arctan2(-rr,cc)
     
     # Get theta factor
-    theta_fact = np.median(theta - theta_exp)
+    theta_fact = bean.nanmedian(theta - theta_exp)
     
     # Get rho factor
-    rho_fact = np.median(rho / rho_exp)
+    rho_fact = bean.nanmedian(rho / bean.fil(rho_exp, lambda x:x==0, np.nan))
     
     ## Return cartesian, updated coordinates
     grid.r = -rho_fact * rho_exp * np.sin(theta_exp + theta_fact) + r0

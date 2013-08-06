@@ -7,8 +7,9 @@
 # Imports
 import numpy as np
 import scipy
-#import pyplot as plt
+import matplotlib.pyplot as plt
 import copy
+import sys
 
 # Bean's bag-o-tricks
 import bean # https://github.com/brazilbean/bean-python-toolkit
@@ -109,19 +110,20 @@ class OffsetGridMethod(GridMethod):
         grid = self.initialize_grid(plate)
         
         # Compute initial placement
-        grid = self.compute_initial_placement(plate, grid)
+        grid = self.compute_initial_placement(plate, grid.copy())
         
         # Perform initial adjustment
-        grid = self.perform_initial_adjustment(plate, grid)
+        grid = self.perform_initial_adjustment(plate, grid.copy())
         
         # Correct grid offset
-        grid = self.correct_offset_grid(plate, grid)
+        grid = self.correct_offset_grid(plate, grid.copy())
         
         # Make final adjustments
-        grid = self.make_final_adjustments(plate, grid)
+        grid = self.make_final_adjustments(plate, grid.copy())
         
         # Sign the package
         grid.info['grid'] = self
+        return grid
 
     def estimate_grid_orientation(self, plate, grid):
         tang = self._size_standard[0] / self._size_standard[1]
@@ -148,8 +150,9 @@ class OffsetGridMethod(GridMethod):
         cc0, rr0 = np.meshgrid(colpositions, rowpositions)
         
         # Define the initial grid coordinates (top-left corner of grid)
-        ri = range(0, self._init_grid_dims[0]-1)
-        ci = range(0, self._init_grid_dims[1]-1)
+        ci, ri = np.meshgrid( 
+            range(0, self._init_grid_dims[1]-1), 
+            range(0, self._init_grid_dims[0]-1) )
         grid.r[ri,ci] = rr0
         grid.c[ri,ci] = cc0
         
@@ -169,14 +172,14 @@ class OffsetGridMethod(GridMethod):
     def perform_initial_adjustment( self, plate, grid ):
         # Extrapolate grid
         rrr, ccc = np.nonzero(~np.isnan(grid.r))
-        grid = gtools.adjust_grid_polar( plate, grid, rrr, ccc )
+        grid = gtools.adjust_grid_polar( plate, grid.copy(), rrr, ccc )
         
         # Fit diagonal of grid (to get a more robust fit)
         cc, rr = np.meshgrid(range(0,grid.dims[1]), range(0,grid.dims[0]))
         foo = np.round(grid.dims[0]/grid.dims[1] * cc) == rr
         rrr, ccc = np.nonzero(foo)
         iii = range(0, grid.dims[1])
-        grid = gtools.adjust_grid_polar( plate, grid, rrr[iii], ccc[iii] )
+        grid = gtools.adjust_grid_polar(plate, grid.copy(), rrr[iii], ccc[iii])
         
         return grid
 
@@ -186,7 +189,7 @@ class OffsetGridMethod(GridMethod):
         overlap = np.zeros(grid.dims) * np.nan
         
         # Use correlation with a 2D gaussian to identify colonies
-        gaus = scipy.stats.norm.pdf( np.linspace(-3, 3, np.fix(grid.win/2)) )
+        gaus = scipy.stats.norm.pdf( np.linspace(-3, 3, np.fix(grid.win)) )
         gbox = gaus * bean.tr(gaus)
         rmax = bean.find(np.max(grid.r,axis=1) < plate.shape[0]-grid.win, -1)
         cmax = bean.find(np.max(grid.c,axis=0) < plate.shape[1]-grid.win, -1)
@@ -196,7 +199,7 @@ class OffsetGridMethod(GridMethod):
             for cc in range(0, cmax):
                 box = gtools.get_box \
                     (plate, grid.r[rr,cc], grid.c[rr,cc], grid.win/2)
-                overlap[rr,cc] = np.corr(box, gbox)
+                overlap[rr,cc] = np.corrcoef(bean.ind(box), bean.ind(gbox))[0,1]
         return overlap
     
     def correct_offset_grid( self, plate, grid ):
@@ -206,13 +209,13 @@ class OffsetGridMethod(GridMethod):
         
         roff = bean.find \
             (bean.nanmean(overlap,axis=1) < correlation_threshold, 0)
-        if np.isempty(roff):
+        if roff.size == 0:
             roff = bean.find \
                 (bean.nanmean(overlap,axis=1) > correlation_threshold, -1) + 1
                 
         coff = bean.find \
             (bean.nanmean(overlap,axis=0) < correlation_threshold, 0)
-        if np.isempty(coff):
+        if coff.size == 0:
             coff = bean.find \
                 (bean.nanmean(overlap,axis=0) > correlation_threshold, -1) + 1
         
@@ -234,65 +237,93 @@ class OffsetGridMethod(GridMethod):
         ci = ci[0]
         
         # Extrapolate full grid positions based on the known locations
-        grid = gtools.adjust_grid_linear( plate, grid, 
-            range(ri, grid.dims[0], 2), range(ci, grid.dims[1], 2) )
+        ccc, rrr = np.meshgrid(
+            range(ci, grid.dims[1], 2), 
+            range(ri, grid.dims[0], 2) )
+        grid = gtools.adjust_grid_linear( plate, grid, rrr, ccc )
         
         # Final adjustment over full grid
-        grid = gtools.adjust_grid_linear( plate, grid, 
-            range(0, grid.dims[0]), range(0, grid.dims[1]) )
+        ccc, rrr = np.meshgrid(
+            range(0, grid.dims[1]),
+            range(0, grid.dims[0]) )
+        grid = gtools.adjust_grid_linear( plate, grid, rrr, ccc)
         # Note: MCAT has two rounds of full adjustment. Is this necessary?
         
         return grid
 
-#
-#def manual_grid( plate, **params ):
-#    
-#    # Get corner points
-#    fig = plt.figure(figsize=(12,8))
-#    fig.suptitle('Manual Grid Alignment')
-#    ax = fig.add_subplot(111)
-#    ax.set_title('Please select the four corners of the colony grid')
-#    ax.imshow(plate, cmap='gray')
-#    def add_num(x, y, numstr):
-#        ax.text(x, y, numstr, transform=ax.transAxes, color='red', 
-#            fontsize=16, fontweight='bold')
-#    add_num(0.05, 0.95, '1')
-#    add_num(0.95, 0.95, '2')
-#    add_num(0.95, 0.05, '3')
-#    add_num(0.05, 0.05, '4')
-#    fig.canvas.draw()
-#    corners = bean.get_points(4, color='r')
-#    plt.close(fig)
-#    
-#    # Determine grid from corners
-#    print "Computing grid position..."
-#    sys.stdout.flush()
-#    grid = initialize_grid(plate)
-#    grid = determine_grid_from_corners( corners, grid )
-#
-#    # Adjust Grid
-#    grid = adjust_grid( plate, grid, **params )
-#    
-#    # Verify
-#    fig = plt.figure(figsize=(12,8))
-#    fig.suptitle('')
-#    ax = fig.add_subplot(111)
-#    ax.set_title('Is the colony grid correct? (Respond in terminal)')
-#    ax.imshow(plate, cmap='gray')
-#    xl, yl = plt.xlim(), plt.ylim()
-#    ax.scatter(grid.c, grid.r, s=5)
-#    plt.xlim(xl), plt.ylim(yl)
-#    fig.canvas.draw()
-#    plt.pause(0.01)
-#    
-#    resp = raw_input('Is the colony grid correct? Y/n/cancel: ')
-#    plt.close(fig)
-#    
-#    if resp.lower()[0] == 'y':
-#        return grid
-#    elif resp.lower()[0] == 'n':
-#        return manual_grid(plate, **params)
-#    else:
-#        return None
-#    
-#
+# end of OffsetAutoGrid
+
+class ManualGridMethod(GridMethod):
+    adjust_grid = None
+    def __init__(self, adjust_grid = True, **kwargs):
+        GridMethod.__init__(self)
+        self.adjust_grid = adjust_grid
+
+    def fit_grid(self, plate):
+        # Initialize grid
+        grid = self.initialize_grid(plate)
+        
+        # Query the user for grid corners
+        grid = self.manually_fit_grid(plate, grid.copy())
+        
+        # Sign the package and return
+        grid.info['grid'] = self
+        return grid
+
+    def manually_fit_grid(self, plate, grid):
+        ## Get corner points
+        # Make figure
+        fig = plt.figure(figsize=(12,8))
+        fig.suptitle('Manual Grid Alignment')
+        ax = fig.add_subplot(111)
+        ax.set_title('Please select the four corners of the colony grid')
+        ax.imshow(plate, cmap='gray')
+        
+        # Add corner labels
+        def add_num(x, y, numstr):
+            ax.text(x, y, numstr, transform=ax.transAxes, color='red', 
+                fontsize=16, fontweight='bold')
+        add_num(0.05, 0.95, '1')
+        add_num(0.95, 0.95, '2')
+        add_num(0.95, 0.05, '3')
+        add_num(0.05, 0.05, '4')
+        fig.canvas.draw()
+        
+        # Get corner coordinates
+        corners = bean.get_points(4, color='r')
+        plt.close(fig)
+        
+        # Determine grid from corners
+        print "Computing grid position..."
+        sys.stdout.flush()
+        grid = gtools.determine_grid_from_corners( corners, grid.copy() )
+    
+        # Adjust Grid
+        ccc, rrr = np.meshgrid( 
+            range(0, grid.dims[1], 2), 
+            range(0, grid.dims[0], 2) )
+        grid = gtools.adjust_grid_linear( plate, grid.copy(), rrr, ccc )
+        
+        # Verify
+        fig = plt.figure(figsize=(12,8))
+        fig.suptitle('')
+        ax = fig.add_subplot(111)
+        ax.set_title('Is the colony grid correct? (Respond in terminal)')
+        ax.imshow(plate, cmap='gray')
+        xl, yl = plt.xlim(), plt.ylim()
+        ax.scatter(grid.c, grid.r, s=5)
+        plt.xlim(xl), plt.ylim(yl)
+        fig.canvas.draw()
+        plt.pause(0.01)
+        
+        resp = raw_input('Is the colony grid correct? Y/n/cancel: ')
+        plt.close(fig)
+        
+        if resp.lower()[0] == 'y':
+            return grid
+        elif resp.lower()[0] == 'n':
+            return self.manually_fit_grid(plate, grid)
+        else:
+            return None
+    
+# End of ManualGridMethod
