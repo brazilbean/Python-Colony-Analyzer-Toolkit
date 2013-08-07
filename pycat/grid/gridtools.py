@@ -129,13 +129,14 @@ def determine_grid_from_corners( corners, grid ):
     
 ## Adjust Grid Functions ##
 def measure_offset( box ):
-    win = (box.shape[0]-1)/2
+    win = box.shape[0]/2
     
     # Get centroid
     thresh = (np.min(box) + np.max(box))/2
     cents = bean.centroids( box > thresh )
     cents = cents - (win+1)
     tmp = np.all(np.abs(cents) < win/2,1)
+    
     if sum(tmp)>0:
         return cents[bean.find(tmp,0),:]
     else:
@@ -148,6 +149,7 @@ def adjust_spot( plate, rpos, cpos, win ):
     box = get_box( plate, rpos, cpos, win )
     if box.size == 0:
         return np.nan, np.nan
+
     off = np.round(measure_offset( box ))
     
     if np.any(off > win/2):
