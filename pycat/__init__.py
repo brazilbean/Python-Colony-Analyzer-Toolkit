@@ -20,40 +20,44 @@ import pickle
 # Bean's bag-o-tricks
 import bean # https://github.com/brazilbean/bean-python-toolkit
 
-def measure_colony_sizes( *args ):
-    pass
-#def measure_colony_sizes( plate, 
-#    imgloader = _io.PlateLoader(),
-#    grid = _grid.OffsetGridMethod(),
-#    threshold = _threshold.BackgroundOffset(),
-#    metric = _quantify.ColonyArea() ):
-#
-#    ## Load plate
-#    if isinstance(plate, basestring):
-#        # "plate" is the file name
-#        plate = imgloader(plate)
-#        plate.info['imgloader'] = imgloader
-#        
-#    else:
-#        # "plate" is the actual image - assume it is pre-processed
-#        pass
-#        
-#    ## Determine grid
-#    if isinstance(grid, _grid.Grid):
-#        pgrid = grid
-#    else:
-#        pgrid = grid(plate)
-#
-#    ## Intensity thresholds
-#    if not hasattr(pgrid, 'thresh'):
-#        pgrid.thresh = threshold( plate, pgrid )
-#    
-#    # Measure colony size
-#    pgrid.info['metric'] = metric
-#    rrr, ccc = range(0, pgrid.dims[0]), range(0, pgrid.dims[1])
-#    sizes = [ [ metric( plate, pgrid, r, c ) for c in ccc] for r in rrr];
-#  
-#    return np.array(sizes), pgrid
+def measure_colony_sizes( plate, 
+    imgloader = _io.PlateLoader(),
+    grid = _grid.OffsetGridMethod(),
+    threshold = _threshold.BackgroundOffset(),
+    metric = _quantify.ColonyArea() ):
+
+    ## Load plate
+    record_loader = False
+    if isinstance(plate, basestring):
+        # "plate" is the file name
+        filename = plate
+        record_loader = True
+        plate = imgloader(plate)
+        
+    else:
+        # "plate" is the actual image - assume it is pre-processed
+        pass
+        
+    ## Determine grid
+    if isinstance(grid, _grid.Grid):
+        pgrid = grid
+    else:
+        pgrid = grid(plate)
+    if record_loader:
+        pgrid.info['imgloader'] = imgloader
+        pgrid.info['file'] = filename
+        
+    ## Intensity thresholds
+    if pgrid.thresh is None:
+        pgrid.thresh = threshold( plate, pgrid )
+        pgrid.info['threshold'] = threshold
+    
+    # Measure colony size
+    pgrid.info['metric'] = metric
+    rrr, ccc = range(0, pgrid.dims[0]), range(0, pgrid.dims[1])
+    sizes = [ [ metric( plate, pgrid, r, c ) for c in ccc] for r in rrr];
+  
+    return np.array(sizes), pgrid
     
         
 def analyze_image( filename, **params ):

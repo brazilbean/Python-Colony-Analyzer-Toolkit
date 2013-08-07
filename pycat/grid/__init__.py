@@ -27,7 +27,6 @@ class Grid:
     r = None
     c = None
     thresh = None
-    threshed = None
     
     def __init__ (self):
         self.info = {}
@@ -36,7 +35,6 @@ class Grid:
         self.r = None
         self.c = None
         self.thresh = None
-        self.threshed = None
     
     def __repr__(self):
         foo = vars(self)

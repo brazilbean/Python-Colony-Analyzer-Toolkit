@@ -69,6 +69,88 @@ def threshold_bounded( plate, grid, r, c ):
     
     return np.sum(bbox)
     
-
+def clear_adjacent_colonies(box, bbox):
+    # Find colony borders
+    rmin, rmax, cmin, cmax = find_colony_borders( box, bbox )
     
+    # Block out everything but colony in binary image
+    bbox[:rmin,:] = False
+    bbox[rmax:,:] = False
+    bbox[:,:cmin] = False
+    bbox[:,cmax:] = False
+    
+    # Block out everything but colony in pixel image
+    box[bbox] = np.nan
+    
+    return box, bbox
+    
+## Classes
+class ColonyQuantifier(object):
+    label = None
+    
+    def __init__(self, label = 'size'):
+        self.label = label
+    
+    def __call__(self, *args, **kwargs):
+        return self.quantify(*args, **kwargs)
+        
+    def parse_box(self, *args):
+        if len(args) == 4:
+            # Plate, grid, and row/column indexes passed
+            plate, grid, row, col = args
+            box = pygrid.gridtools.get_box( 
+                plate, grid.r[row,col], grid.c[row,col], grid.win )
+            
+            # Determine binary image
+            bbox = pygrid.gridtools.get_box( 
+               grid.thresh, grid.r[row,col], grid.c[row,col], grid.win )
+           
+        elif len(args) == 2:
+            # Pixel and binary colony boxes passed
+            box, bbox = args
+            
+        elif len(args) == 1:
+            # Binary colony box passed
+            box = []
+            bbox = args[0]
+            
+        else:
+            raise Exception('Incorrect number of arguments: %i'%(len(args)))
+            
+        return box, bbox
+            
+class ColonyArea(ColonyQuantifier):
+    def __init__(self):
+        super(ColonyArea, self).__init__('area')
+    
+    def quantify(self, *args):
+        box, bbox = self.parse_box(*args)
+        if len(box) == 0:
+            raise Exception('This method requires pixel information.')
+        
+        
+        # Remove adjacent colonies
+        _, bbox = clear_adjacent_colonies(box, bbox)
+        
+        # Sum area
+        return np.sum(bbox)
+        
+class ColonySumIntensity(ColonyQuantifier):
+    def __init__(self):
+        super(ColonySumIntensity, self).__init__('sumintensity')
+        
+    def quantify(self, *args):
+        box, bbox = self.parse_box(*args)
+        if len(box) == 0:
+            raise Exception('This method requires pixel information.')
+        
+        
+        # Remove adjacent colonies
+        box, bbox = clear_adjacent_colonies(box, bbox)
+        
+        # Sum pixel intensity
+        return np.nansum(box)
+            
+            
+            
     
