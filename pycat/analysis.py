@@ -82,7 +82,7 @@ def h2_colony_filter( plate ):
     plate[rows[0]:rows[1], cols[0]:cols[1]] = np.nan
     return plate
     
-def empty_spot_filter( plate, emptythreshold=50 ):
+def empty_spot_filter( plate, emptythreshold=20 ):
     plate = np.array(plate).astype(float)
     plate[plate < emptythreshold] = np.nan
     return plate
@@ -90,6 +90,154 @@ def empty_spot_filter( plate, emptythreshold=50 ):
 ##---------------------##
 ## Spatial Corrections ##
 ##---------------------##
+class SpatialMedian(object):
+    windowsize = None
+    windowshape = None
+    windowfun = None
+    window = None
+    
+    def __init__(self, 
+        windowsize = 9, 
+        windowshape = 'round', 
+        windowfun = bean.nanmedian, 
+        window = None ):
+        self.windowsize = windowsize
+        self.windowshape = windowshape
+        self.windowfun = windowfun
+        self.window = window
+        
+    def __call__(self, *args, **kwargs):
+        return self.filter(*args, **kwargs)
+        
+    def filter(self, colsizes):
+        # Set up window
+        if self.window is None:
+            # No window provided -> make one
+            if self.windowshape.lower() == 'round':
+                # Make a round window
+                self.window = self._round_window( self.windowsize )
+            
+            elif self.windowshape.lower() == 'square':
+                self.window = bean.trues( self.windowsize, self.windowsize )
+                
+            else:
+                raise Exception('Unrecognized value for windowshape: %s'%(
+                    self.windowshape))
+        
+        # Reshape colsizes
+        n = bean.numel(colsizes)
+        dims = np.array([8, 12]) * np.sqrt( n / 96 )
+        colsizes = bean.fil(colsizes, np.isnan, bean.nanmedian(colsizes)) 
+        colsizes = colsizes.reshape(dims)
+        
+        return si.median_filter( colsizes, 
+            footprint = self.window, mode = 'reflect' )
+    
+    def _round_window(self, size):
+        window = bean.falses(size, size)
+        xx, yy = np.meshgrid( range(0,size), range(0,size) )
+        mid = (size-1)/2.0
+        r = np.sqrt( np.ceil((size-1)/2.0) * ((size-1)/2.0) )
+        window[ np.sqrt((xx-mid)**2 + (yy-mid)**2) <= r ] = True
+        return window
+        
+class BorderMedian(object):
+    depth = None
+    fun = None
+    
+    def __init__(self, depth = 4, fun = bean.nanmedian):
+        self.depth = depth
+        self.fun = fun
+        
+    def __call__(self, *args, **kwargs):
+        return self.filter(*args, **kwargs)
+        
+    def filter(self, colsizes):
+        # Dimensions, reshape colsizes
+        n = bean.numel(colsizes)
+        dims = np.array([8, 12]) * np.sqrt( n / 96 )
+        colsizes = np.array(colsizes) # copy to avoid side effects
+        colsizes = colsizes.reshape(dims)
+        
+        # Plate median
+        pmed = bean.nanmedian(colsizes)
+        
+        # Allocate borders
+        border1 = np.ones(dims) * pmed
+        border2 = np.ones(dims) * pmed
+        
+        # Compute border medians
+        d = self.depth
+        border1[-d:,:] = self.fun(colsizes[-d:,d+1:-d], axis=1)
+        border1[:d,:] = self.fun(colsizes[:d,d+1:-d], axis=1)
+        border2[:,-d:] = self.fun(colsizes[d+1:-d,-d:], axis=0)
+        border2[:,:d] = self.fun(colsizes[d+1:-d,:d], axis=0)
+        
+        return (border1 + border2) - pmed
+
+class SpatialBorderMedian(object):
+    spatialfilter = None
+    borderfilter = None
+    
+    def __init__(self, 
+        spatialfilter = SpatialMedian(), 
+        borderfilter = BorderMedian() ):
+        self.spatialfilter = spatialfilter
+        self.borderfilter = borderfilter
+        
+    def __call__(self, *args, **kwargs):
+        return self.filter(*args, **kwargs)
+        
+    def filter(self, colsizes):
+        # Pre-spatial
+        spatial = self.spatialfilter(colsizes) + 0.0
+        
+        # Border
+        border = self.borderfilter(colsizes / spatial)
+        
+        # Spatial
+        spatial = self.spatialfilter(colsizes / border)
+        
+        # Return
+        return border * spatial
+        
+class InterleaveFilter(object):
+    filter_ = None
+    numsubgrids = None
+    independent = None
+    
+    def __init__(self, filter, 
+        numsubgrids = 4, 
+        independent = True ):
+        self.filter_ = filter
+        self.numsubgrids = numsubgrids
+        self.independent = independent
+        
+    def __call__(self, *args, **kwargs):
+        return self.filter(*args, **kwargs)
+    
+    def filter(self, input):
+        # Identify sub-grids
+        shape = np.array(input.shape)
+        sgrids = bean.subgrids(shape, self.numsubgrids)
+        sgrids = sgrids.reshape(tuple( 
+            x/np.sqrt(self.numsubgrids) for x in shape) + (self.numsubgrids,))
+            
+        # Interleave filter
+        out = bean.ind(np.zeros(input.shape))
+        input = bean.ind(input) 
+        for ii in range(0, self.numsubgrids):
+            out[sgrids[:,:,ii]] = self.filter_(input[sgrids[:,:,ii]])
+        
+        # Preserve sub-grid means
+        if not self.independent:
+            cout = bean.nanmean(out[sgrids].reshape(sgrids.shape), axis=2)
+            for ii in range(0, self.numsubgrids):
+                out[sgrids[:,:,ii]] = cout
+                
+        # Reshape
+        return out.reshape(shape)
+        
 def empty_neighbor( plate, **params ):
     bean.default_param( params, 
         emptyspots=np.isnan(plate) )
